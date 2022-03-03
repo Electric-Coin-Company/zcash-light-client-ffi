@@ -4,6 +4,7 @@
 #include <stdlib.h>
 
 typedef struct {
+  uint32_t account_id;
   const char *extfvk;
   const char *extpub;
 } FFIUnifiedViewingKey;
@@ -104,7 +105,14 @@ char *zcashlc_derive_shielded_address_from_seed(const uint8_t *seed,
 char *zcashlc_derive_shielded_address_from_viewing_key(const char *extfvk, uint32_t network_id);
 
 /**
- * derives a shielded address from the given viewing key.
+ * derives a transparent address from the given viewing key.
+ * call zcashlc_string_free with the returned pointer when done using it
+ */
+char *zcashlc_derive_transparent_address_from_account_public_key(const char *account_pubkey,
+                                                                 uint32_t network_id);
+
+/**
+ * derives a transparent address from the given transparent public key.
  * call zcashlc_string_free with the returned pointer when done using it
  */
 char *zcashlc_derive_transparent_address_from_public_key(const char *pubkey, uint32_t network_id);
@@ -124,9 +132,6 @@ char *zcashlc_derive_transparent_address_from_seed(const uint8_t *seed,
                                                    uint32_t network_id);
 
 /**
- * TEST TEST 123 TEST
- *
- *
  * Derives a transparent private key from seed
  */
 char *zcashlc_derive_transparent_private_key_from_seed(const uint8_t *seed,
@@ -212,7 +217,8 @@ int64_t zcashlc_get_total_transparent_balance(const uint8_t *db_data,
 int64_t zcashlc_get_verified_balance(const uint8_t *db_data,
                                      uintptr_t db_data_len,
                                      int32_t account,
-                                     uint32_t network_id);
+                                     uint32_t network_id,
+                                     uint32_t min_confirmations);
 
 /**
  * Returns the verified transparent balance for the address, which ignores utxos that have been
@@ -221,7 +227,8 @@ int64_t zcashlc_get_verified_balance(const uint8_t *db_data,
 int64_t zcashlc_get_verified_transparent_balance(const uint8_t *db_data,
                                                  uintptr_t db_data_len,
                                                  const char *address,
-                                                 uint32_t network_id);
+                                                 uint32_t network_id,
+                                                 uint32_t min_confirmations);
 
 /**
  * Initialises the data database with the given number of accounts using the given seed.

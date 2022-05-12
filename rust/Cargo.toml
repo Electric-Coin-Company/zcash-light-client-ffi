@@ -13,14 +13,14 @@ ffi_helpers = "0.2"
 hex = "0.4"
 zcash_client_backend = { version = "0.5", features = ["transparent-inputs"] }
 zcash_client_sqlite = { version = "0.3", features = ["transparent-inputs"] }
-zcash_primitives = "0.5"
-zcash_proofs = "0.5"
-orchard = "=0.1.0-beta.3"
+zcash_primitives = "0.6"
+zcash_proofs = "0.6"
+orchard = "0.1"
 #### Temporary additions: ####################################
 base58 = "0.1.0"
 sha2 = "0.9"
-hdwallet = "0.3.0"
-ripemd160 = "0.9"
+hdwallet = "0.3.1"
+ripemd = "0.1"
 secp256k1 = "0.20"
 time = "0.2"
 num-bigint = "0.3.3"
@@ -38,12 +38,12 @@ crate-type = ["staticlib"]
 lto = true
 
 [patch.crates-io]
-#zcash_address = { git = "https://github.com/zcash/librustzcash.git", rev = "33f6ffedcfd7665e4a709e7593b9fddea64a2952" }
-zcash_client_sqlite = { git = "https://github.com/zcash/librustzcash.git", rev = "33f6ffedcfd7665e4a709e7593b9fddea64a2952" }
-zcash_client_backend = { git = "https://github.com/zcash/librustzcash.git", rev = "33f6ffedcfd7665e4a709e7593b9fddea64a2952" }
-zcash_primitives = { git = "https://github.com/zcash/librustzcash.git", rev = "33f6ffedcfd7665e4a709e7593b9fddea64a2952" }
-zcash_proofs = { git = "https://github.com/zcash/librustzcash.git", rev = "33f6ffedcfd7665e4a709e7593b9fddea64a2952" }
-hdwallet = { git = "https://github.com/nuttycom/hdwallet", rev = "9b4c1bdbe0517e3a7a8f285d6048a37d472ba3bc" }
+
+zcash_client_sqlite = { git = "https://github.com/zcash/librustzcash.git", rev = "8101b1a035205831469bda3402534ce21a69c611" }
+zcash_client_backend = { git = "https://github.com/zcash/librustzcash.git", rev = "8101b1a035205831469bda3402534ce21a69c611" }
+zcash_primitives = { git = "https://github.com/zcash/librustzcash.git", rev = "8101b1a035205831469bda3402534ce21a69c611" }
+zcash_proofs = { git = "https://github.com/zcash/librustzcash.git", rev = "8101b1a035205831469bda3402534ce21a69c611" }
+
 
 [features]
 mainnet = ["zcash_client_sqlite/mainnet"]

@@ -11,6 +11,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::slice;
 use std::str::FromStr;
+use ripemd::{Digest};
 use zcash_client_backend::{
     address::RecipientAddress,
     data_api::{
@@ -71,7 +72,7 @@ use zcash_primitives::{
         AccountId,
     }
 };
-use sha2::{Digest, Sha256};
+use sha2::{Digest as Sha2Digest, Sha256};
 use secp256k1::key::{PublicKey};
 use std::convert::TryFrom;
 use zcash_proofs::prover::LocalTxProver;
@@ -317,21 +318,6 @@ pub struct FFIUnifiedViewingKey {
     extpub: *const c_char,
 }
 
-// TODO: Return these on init_accounts_table instead of just Sapling SKs
-// #[repr(C)]
-// pub struct FFIUnifiedSpendingKey {
-//     account_id: u32,
-//     transparent: *const u8,
-//     sapling: *const u8,
-// }
-
-
-// #[repr(C)]
-// pub struct FFIUSKBoxedSlice {
-//     ptr: *mut FFIUnifiedSpendingKey,
-//     len: usize, //number of elements
-// }
-
 #[repr(C)]
 pub struct FFIUVKBoxedSlice {
     ptr: *mut FFIUnifiedViewingKey,
@@ -536,9 +522,9 @@ pub unsafe extern "C" fn zcashlc_derive_shielded_address_from_seed(
 fn derive_transparent_address_from_public_key(
     public_key: &secp256k1::key::PublicKey,
 ) -> TransparentAddress {
-    let mut hash160 = ripemd160::Ripemd160::new();
-    hash160.update(Sha256::digest(&public_key.serialize()));
-    TransparentAddress::PublicKey(*hash160.finalize().as_ref())
+    TransparentAddress::PublicKey(
+        *ripemd::Ripemd160::digest(Sha256::digest(&public_key.serialize())).as_ref(),
+    )
 }
 
 /// derives a transparent address from the given transparent public key.

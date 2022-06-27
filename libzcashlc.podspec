@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
     s.name             = 'libzcashlc'
-    s.version          = '0.0.3'
+    s.version          = '0.1.0'
     s.summary          = 'Rust core for Zcash clients'
     s.homepage         = 'https://github.com/zcash-hackworks/zcash-light-client-ffi'
     s.license          = { :type => 'MIT', :file => 'LICENSE' }

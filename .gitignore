@@ -7,6 +7,7 @@ rust/target/
 
 # These are build by-products that `make xcframework` produces
 products/
+Products/
 
 # These are SPM generated files
 .swiftpm

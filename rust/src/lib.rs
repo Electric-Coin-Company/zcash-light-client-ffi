@@ -117,7 +117,7 @@ pub extern "C" fn zcashlc_clear_last_error() {
 /// value.
 ///
 /// Returns 0 if successful, 1 if the seed must be provided in order to execute the requested
-/// migrations, or 2 otherwise.
+/// migrations, or -1 otherwise.
 #[no_mangle]
 pub extern "C" fn zcashlc_init_data_database(
     db_data: *const u8,
@@ -144,7 +144,7 @@ pub extern "C" fn zcashlc_init_data_database(
             Err(e) => Err(format_err!("Error while initializing data DB: {}", e)),
         }
     });
-    unwrap_exc_or(res, 2)
+    unwrap_exc_or(res, -1)
 }
 
 /// Initialises the data database with the given number of accounts using the given seed.

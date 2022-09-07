@@ -1194,39 +1194,29 @@ pub extern "C" fn zcashlc_get_received_memo(
     db_data: *const u8,
     db_data_len: usize,
     id_note: i64,
-    memo_bytes_ret: *mut [u8; 512],
-    network_id: u32,
-) -> bool {
-    zcashlc_get_memo(
-        db_data,
-        db_data_len,
-        NoteId::ReceivedNoteId(id_note),
-        memo_bytes_ret,
-        network_id,
-    )
-}
-
-fn zcashlc_get_memo(
-    db_data: *const u8,
-    db_data_len: usize,
-    note_id: NoteId,
-    memo_bytes_ret: *mut [u8; 512],
+    memo_bytes_ret: *mut u8,
     network_id: u32,
 ) -> bool {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
-        let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-
-        let memo_bytes = (&db_data)
-            .get_memo(note_id)
+        let db_data =unsafe { wallet_db(db_data, db_data_len, network)? };
+        
+        let memo_bytes = (&db_data).get_memo(NoteId::ReceivedNoteId(id_note))
             .map_err(|e| format_err!("An error occurred retrieving the memo, {}", e))
-            .map(|memo| memo.encode())?;
+            .map(|memo| memo.encode())
+            .unwrap();
+        let memo_slice = memo_bytes.as_slice();
 
-        unsafe { memo_bytes_ret.copy_from(memo_bytes.as_array(), 512) };
+        if memo_slice.len() != 512 {
+            return Err(format_err!("An error ocurred retrieving the memo, memo lenght is not 512 bytes."))
+        }
+
+        unsafe { memo_bytes_ret.copy_from(memo_slice.as_ptr(), 512) }
         Ok(true)
     });
     unwrap_exc_or(res, false)
 }
+
 
 /// Returns the memo for a sent note, if it is known and a valid UTF-8 string.
 ///
@@ -1288,16 +1278,28 @@ pub extern "C" fn zcashlc_get_sent_memo(
     db_data: *const u8,
     db_data_len: usize,
     id_note: i64,
-    memo_bytes_ret: *mut [u8; 512],
+    memo_bytes_ret: *mut u8,
     network_id: u32,
 ) -> bool {
-    zcashlc_get_memo(
-        db_data,
-        db_data_len,
-        NoteId::SentNoteId(id_note),
-        memo_bytes_ret,
-        network_id,
-    )
+    let res = catch_panic(|| {
+        let network = parse_network(network_id)?;
+        let db_data = unsafe { wallet_db(db_data, db_data_len, network)? }; 
+        
+        let memo_bytes = (&db_data).get_memo(NoteId::SentNoteId(id_note))
+            .map_err(|e| format_err!("An error occurred retrieving the memo, {}", e))
+            .map(|memo| memo.encode())
+            .unwrap();
+
+        let memo_slice = memo_bytes.as_slice();
+
+        if memo_slice.len() != 512 {
+            return Err(format_err!("An error ocurred retrieving the memo, memo lenght is not 512 bytes."))
+        }
+
+        unsafe { memo_bytes_ret.copy_from(memo_slice.as_ptr(), 512) }
+        Ok(true)
+    });
+    unwrap_exc_or(res, false)
 }
 
 /// Checks that the scanned blocks in the data database, when combined with the recent

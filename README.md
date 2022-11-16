@@ -36,3 +36,17 @@ Depending on what state the intermediate build products might be in, you may fir
 2. Update `s.version` in `libzcashlc.podspec` to the new release version.
 3. (assuming you have the `pod` command) `pod trunk push libzcashlc.podspec`
 
+
+## License
+
+Licensed under MIT license ([LICENSE](LICENSE) or http://opensource.org/licenses/MIT).
+
+Downstream code forks should note that 'libzcashlc' (and thus XCFramework)
+depends on the 'orchard' crate, which is licensed under the [Bootstrap Open
+Source License](https://github.com/zcash/orchard/blob/main/LICENSE-BOSL).  A
+license exception is provided allowing some derived works that are linked or
+combined with the 'orchard' crate to be copied or distributed under the original
+licenses (in this case MIT), provided that the included portions of the
+'orchard' code remain subject to BOSL.  See
+https://github.com/zcash/orchard/blob/main/COPYING for details of which derived
+works can make use of this exception.

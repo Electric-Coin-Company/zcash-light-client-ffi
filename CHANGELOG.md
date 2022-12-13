@@ -1,4 +1,13 @@
-# unreleased
+# unreleased 
+
+FsBlock Db implementation and removal of BlockBb cache.
+
+
+Implement `zcashlc_write_block_metadata`, `zcashlc_free_block_meta, `zcashlc_free_blocks_meta`
+
+Declare `repr(C)` structs for FFI:
+ - `FFIBlockMeta`: a block metadata row
+ - `FFIBlocksMeta`: a structure that holds an array of `FFIBlockMeta`
 
 - [#78] removing cocoapods support
 # 0.1.1

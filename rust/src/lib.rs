@@ -4,7 +4,6 @@ use failure::format_err;
 use ffi_helpers::panic::catch_panic;
 use schemer::MigratorError;
 use secrecy::Secret;
-
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::ffi::{CStr, CString, OsStr};
@@ -38,8 +37,9 @@ use zcash_client_backend::{
 #[allow(deprecated)]
 use zcash_client_sqlite::wallet::get_rewind_height;
 use zcash_client_sqlite::{
+    chain::BlockMeta,
     wallet::init::{init_accounts_table, init_blocks_table, init_wallet_db, WalletMigrationError},
-    BlockDb, NoteId, WalletDb,
+    FsBlockDb, NoteId, WalletDb,
 };
 use zcash_primitives::consensus::Network::{MainNetwork, TestNetwork};
 use zcash_primitives::{
@@ -98,21 +98,21 @@ unsafe fn wallet_db(
         .map_err(|e| format_err!("Error opening wallet database connection: {}", e))
 }
 
-/// Helper method for construcing a BlockDb value from path data provided over the FFI.
+/// Helper method for construcing a FsBlockDb value from path data provided over the FFI.
 ///
 /// # Safety
 ///
-/// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+/// - `fsblock_db` must be non-null and valid for reads for `fsblock_db_len` bytes, and it must have an
 ///   alignment of `1`. Its contents must be a string representing a valid system path in the
 ///   operating system's preferred representation.
-/// - The memory referenced by `db_data` must not be mutated for the duration of the function call.
-/// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+/// - The memory referenced by `fsblock_db` must not be mutated for the duration of the function call.
+/// - The total size `fsblock_db_len` must be no larger than `isize::MAX`. See the safety
 ///   documentation of pointer::offset.
-unsafe fn block_db(cache_db: *const u8, cache_db_len: usize) -> Result<BlockDb, failure::Error> {
+fn block_db(fsblock_db: *const u8, fsblock_db_len: usize) -> Result<FsBlockDb, failure::Error> {
     let cache_db = Path::new(OsStr::from_bytes(unsafe {
-        slice::from_raw_parts(cache_db, cache_db_len)
+        slice::from_raw_parts(fsblock_db, fsblock_db_len)
     }));
-    BlockDb::for_path(cache_db)
+    FsBlockDb::for_path(cache_db)
         .map_err(|e| format_err!("Error opening block source database connection: {}", e))
 }
 
@@ -1679,7 +1679,7 @@ pub unsafe extern "C" fn zcashlc_validate_combined_chain(
 ) -> i32 {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
-        let block_db = unsafe { block_db(db_cache, db_cache_len)? };
+        let block_db = block_db(db_cache, db_cache_len)? ;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
         let validate_from = (&db_data)
@@ -1828,7 +1828,7 @@ pub unsafe extern "C" fn zcashlc_scan_blocks(
 ) -> i32 {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
-        let block_db = unsafe { block_db(db_cache, db_cache_len)? };
+        let block_db = block_db(db_cache, db_cache_len)?;
         let db_read = unsafe { wallet_db(db_data, db_data_len, network)? };
         let mut db_data = db_read.get_update_ops()?;
         let limit = if scan_limit == 0 {
@@ -1910,6 +1910,122 @@ pub unsafe extern "C" fn zcashlc_put_utxo(
     });
     unwrap_exc_or(res, false)
 }
+
+
+
+// 
+// FsBlock Interfaces
+//
+
+#[repr(C)]
+pub struct FFIBlocksMeta {
+    ptr: *mut FFIBlockMeta,
+    len: usize, // number of elems
+}
+
+impl FFIBlocksMeta {
+    pub fn ptr_from_vec(v: Vec<FFIBlockMeta>) -> *mut Self {
+        // Going from Vec<_> to Box<[_]> just drops the (extra) `capacity`
+        let boxed_slice: Box<[FFIBlockMeta]> = v.into_boxed_slice();
+        let len = boxed_slice.len();
+        let fat_ptr: *mut [FFIBlockMeta] = Box::into_raw(boxed_slice);
+        // It is guaranteed to be possible to obtain a raw pointer to the start
+        // of a slice by casting the pointer-to-slice, as documented e.g. at
+        // <https://doc.rust-lang.org/std/primitive.pointer.html#method.as_mut_ptr>.
+        // TODO: replace with `as_mut_ptr()` when that is stable.
+        let slim_ptr: *mut FFIBlockMeta = fat_ptr as _;
+        Box::into_raw(Box::new(FFIBlocksMeta { ptr: slim_ptr, len }))
+    }
+}
+
+#[repr(C)]
+pub struct FFIBlockMeta {
+    height: u32,
+    block_hash_ptr: *mut u8,
+    block_hash_ptr_len: usize,
+    block_time: u32,
+    sapling_outputs_count: u32,
+    orchard_actions_count: u32,
+}
+
+/// Frees an array of FFIBlocksMeta values as allocated by `zcashlc_derive_unified_viewing_keys_from_seed`
+///
+/// # Safety
+///
+/// - `ptr` must be non-null and must point to a struct having the layout of [`FFIBlocksMeta`].
+///   See the safety documentation of [`FFIBlocksMeta`].
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_free_blocks_meta(ptr: *mut FFIBlocksMeta) {
+    if !ptr.is_null() {
+        let s: Box<FFIBlocksMeta> = unsafe { Box::from_raw(ptr) };
+
+        let slice: &mut [FFIBlockMeta] = unsafe { slice::from_raw_parts_mut(s.ptr, s.len) };
+        for k in slice.into_iter() {
+            unsafe { zcashlc_free_block_meta(k) }
+        }
+        drop(s);
+    }
+}
+
+/// Frees a FFIBlockMeta value
+///
+/// # Safety
+///
+/// - `ptr` must be non-null and must point to a struct having the layout of [`FFIBlockMeta`].
+///   See the safety documentation of [`FFIBlockMeta`].
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_free_block_meta(ptr: *mut FFIBlockMeta) {
+    if !ptr.is_null() {
+        let meta: Box<FFIBlockMeta> = unsafe { Box::from_raw(ptr) };
+        let meta_slice: &mut [u8] =
+            unsafe { slice::from_raw_parts_mut(meta.block_hash_ptr, meta.block_hash_ptr_len) };
+        drop(unsafe { Box::from_raw(meta_slice) });
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_write_block_metadata(
+    fs_block_db: *const u8,
+    fs_block_db_len: usize,
+    blocks_meta: *mut FFIBlocksMeta,
+) -> bool {
+    let res = catch_panic(|| {
+
+        let block_db = block_db(fs_block_db, fs_block_db_len)?;
+
+        let blocks_meta: Box<FFIBlocksMeta> = unsafe { Box::from_raw(blocks_meta) };
+        
+        let blocks_metadata_slice: &mut [FFIBlockMeta] = unsafe { slice::from_raw_parts_mut(blocks_meta.ptr, blocks_meta.len) };
+        
+        let mut blocks = Vec::with_capacity(blocks_metadata_slice.len());
+        
+        for b in blocks_metadata_slice {
+            let block_hash_bytes = unsafe { slice::from_raw_parts(b.block_hash_ptr, b.block_hash_ptr_len) };
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(block_hash_bytes);
+
+            blocks.push(
+                BlockMeta {
+                    height: BlockHeight::from_u32(b.height),
+                    block_hash: BlockHash(hash),
+                    block_time: b.block_time,
+                    sapling_outputs_count: b.sapling_outputs_count,
+                    orchard_actions_count: b.orchard_actions_count,
+                } 
+            );
+        }
+        
+        match block_db.write_block_metadata(&blocks) {
+            Ok(()) => Ok(true),
+            Err(e) => Err(format_err!(
+                "Failed to write block metadata to FsBlockDb: {:?}",
+                e
+            )),
+        }
+    });
+    unwrap_exc_or(res, false)
+}
+
 
 /// Decrypts whatever parts of the specified transaction it can and stores them in db_data.
 ///

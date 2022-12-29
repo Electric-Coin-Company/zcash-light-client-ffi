@@ -4,6 +4,7 @@ use failure::format_err;
 use ffi_helpers::panic::catch_panic;
 use schemer::MigratorError;
 use secrecy::Secret;
+use zcash_primitives::transaction::components::amount::NonNegativeAmount;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::ffi::{CStr, CString, OsStr};
@@ -37,7 +38,7 @@ use zcash_client_backend::{
 #[allow(deprecated)]
 use zcash_client_sqlite::wallet::get_rewind_height;
 use zcash_client_sqlite::{
-    chain::BlockMeta,
+    chain::{BlockMeta, init::init_blockmeta_db},
     wallet::init::{init_accounts_table, init_blocks_table, init_wallet_db, WalletMigrationError},
     FsBlockDb, NoteId, WalletDb,
 };
@@ -1984,6 +1985,25 @@ pub unsafe extern "C" fn zcashlc_free_block_meta(ptr: *mut FFIBlockMeta) {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn zcashlc_init_block_metadata_db(
+    fs_block_db: *const u8,
+    fs_block_db_len: usize,
+) -> bool {
+    let res = catch_panic(|| {
+        let mut block_db = block_db(fs_block_db, fs_block_db_len)?;
+
+        match init_blockmeta_db(&mut block_db) {
+            Ok(()) => Ok(true),
+            Err(e) => Err(format_err!(
+                "Error while initializing block metadata DB: {}",
+                e
+            )),
+        }
+    });
+    unwrap_exc_or(res, false)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn zcashlc_write_block_metadata(
     fs_block_db: *const u8,
     fs_block_db_len: usize,
@@ -2262,6 +2282,7 @@ pub unsafe extern "C" fn zcashlc_string_free(s: *mut c_char) {
 /// - The memory referenced by `usk_ptr` must not be mutated for the duration of the function call.
 /// - The total size `usk_len` must be no larger than `isize::MAX`. See the safety documentation
 /// - `memo` must either be null (indicating an empty memo) or point to a 512-byte array.
+/// - `shielding_threshold` a non-negative shielding threshold amount in zatoshi
 /// - `spend_params` must be non-null and valid for reads for `spend_params_len` bytes, and it must have an
 ///   alignment of `1`. Its contents must be the Sapling spend proving parameters.
 /// - The memory referenced by `spend_params` must not be mutated for the duration of the function call.
@@ -2279,6 +2300,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
     usk_ptr: *const u8,
     usk_len: usize,
     memo: *const u8,
+    shielding_threshold: u64,
     spend_params: *const u8,
     spend_params_len: usize,
     output_params: *const u8,
@@ -2301,6 +2323,12 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
             MemoBytes::from_bytes(unsafe { slice::from_raw_parts(memo, 512) })
                 .map_err(|e| format_err!("Invalid MemoBytes {}", e))?
         };
+
+        let shielding_threshold =
+            NonNegativeAmount::from_u64(shielding_threshold).map_err(|()| format_err!("Invalid amount, out of range"))?;
+        // if threshold.is_negative() {
+        //     return Err(format_err!("Amount is negative"));
+        // }
 
         let spend_params = Path::new(OsStr::from_bytes(unsafe {
             slice::from_raw_parts(spend_params, spend_params_len)
@@ -2347,6 +2375,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
                 &network,
                 LocalTxProver::new(spend_params, output_params),
                 &input_selector,
+                shielding_threshold,
                 &usk,
                 &taddrs,
                 &memo_bytes,
@@ -2364,6 +2393,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
                 &network,
                 LocalTxProver::new(spend_params, output_params),
                 &input_selector,
+                shielding_threshold,
                 &usk,
                 &taddrs,
                 &memo_bytes,

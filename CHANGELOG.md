@@ -2,7 +2,7 @@
 
 FsBlock Db implementation and removal of BlockBb cache.
 
-Implement `zcashlc_write_block_metadata`, `zcashlc_free_block_meta, `zcashlc_free_blocks_meta`
+Implement `zcashlc_init_block_metadata_db`, `zcashlc_write_block_metadata`, `zcashlc_free_block_meta, `zcashlc_free_blocks_meta`
 
 Declare `repr(C)` structs for FFI:
  - `FFIBlockMeta`: a block metadata row

@@ -1949,41 +1949,6 @@ pub struct FFIBlockMeta {
     orchard_actions_count: u32,
 }
 
-/// Frees an array of FFIBlocksMeta values as allocated by `zcashlc_derive_unified_viewing_keys_from_seed`
-///
-/// # Safety
-///
-/// - `ptr` must be non-null and must point to a struct having the layout of [`FFIBlocksMeta`].
-///   See the safety documentation of [`FFIBlocksMeta`].
-#[no_mangle]
-pub unsafe extern "C" fn zcashlc_free_blocks_meta(ptr: *mut FFIBlocksMeta) {
-    if !ptr.is_null() {
-        let s: Box<FFIBlocksMeta> = unsafe { Box::from_raw(ptr) };
-
-        let slice: &mut [FFIBlockMeta] = unsafe { slice::from_raw_parts_mut(s.ptr, s.len) };
-        for k in slice.into_iter() {
-            unsafe { zcashlc_free_block_meta(k) }
-        }
-        drop(s);
-    }
-}
-
-/// Frees a FFIBlockMeta value
-///
-/// # Safety
-///
-/// - `ptr` must be non-null and must point to a struct having the layout of [`FFIBlockMeta`].
-///   See the safety documentation of [`FFIBlockMeta`].
-#[no_mangle]
-pub unsafe extern "C" fn zcashlc_free_block_meta(ptr: *mut FFIBlockMeta) {
-    if !ptr.is_null() {
-        let meta: Box<FFIBlockMeta> = unsafe { Box::from_raw(ptr) };
-        let meta_slice: &mut [u8] =
-            unsafe { slice::from_raw_parts_mut(meta.block_hash_ptr, meta.block_hash_ptr_len) };
-        drop(unsafe { Box::from_raw(meta_slice) });
-    }
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_init_block_metadata_db(
     fs_block_db: *const u8,
@@ -2326,10 +2291,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
 
         let shielding_threshold =
             NonNegativeAmount::from_u64(shielding_threshold).map_err(|()| format_err!("Invalid amount, out of range"))?;
-        // if threshold.is_negative() {
-        //     return Err(format_err!("Amount is negative"));
-        // }
-
+    
         let spend_params = Path::new(OsStr::from_bytes(unsafe {
             slice::from_raw_parts(spend_params, spend_params_len)
         }));

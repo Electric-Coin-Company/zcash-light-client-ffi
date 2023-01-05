@@ -5,7 +5,7 @@ This project is designed for two things:
 1. Provide language bindings for the zcash rust library, in the `rust` directory.  
 2. Packaging for common dependency managers within those language eco systems.
 
-Currently implemented is building for apple platforms as an `xcframework` and for distribution via Swift Package Manager and CocoaPods.
+Currently implemented is building for apple platforms as an `xcframework` and for distribution via Swift Package Manager.
 
 
 ## Building
@@ -29,13 +29,6 @@ Depending on what state the intermediate build products might be in, you may fir
 2. Commit the result.
 3. Tag this commit with the new release version, (following semantic versioning).
 4. Push the commit and tag to the remote repository.
-
-### CocoaPods
-
-1. All of the steps from the `Swift Package Manager` release process above.
-2. Update `s.version` in `libzcashlc.podspec` to the new release version.
-3. (assuming you have the `pod` command) `pod trunk push libzcashlc.podspec`
-
 
 ## License
 

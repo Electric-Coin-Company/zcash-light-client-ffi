@@ -2012,6 +2012,37 @@ pub unsafe extern "C" fn zcashlc_write_block_metadata(
 }
 
 
+/// Rewinds the data database to the given height.
+///
+/// If the requested height is greater than or equal to the height of the last scanned
+/// block, this function does nothing.
+///
+/// # Safety
+///
+/// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+///   alignment of `1`. Its contents must be a string representing a valid system path in the
+///   operating system's preferred representation.
+/// - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+/// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_rewind_fs_block_cache_to_height(
+    fs_block_db_root: *const u8,
+    fs_block_db_root_len: usize,
+    height: i32,
+) -> bool {
+    let res = catch_panic(|| {
+
+        let block_db = block_db(fs_block_db_root, fs_block_db_root_len)?;
+        let height = BlockHeight::try_from(height)?;
+        block_db
+            .rewind_to_height(height)
+            .map(|_| true)
+            .map_err(|e| format_err!("Error while rewinding data DB to height {}: {}", height, e))
+    });
+    unwrap_exc_or(res, false)
+}
+
 /// Decrypts whatever parts of the specified transaction it can and stores them in db_data.
 ///
 /// # Safety

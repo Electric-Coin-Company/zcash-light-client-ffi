@@ -41,8 +41,8 @@ testnet = []
 
 [patch.crates-io]
 
-zcash_client_backend = { git = "https://github.com/zcash/librustzcash.git", rev = "7cbb2778843832e53b26470d95d28a4e73c93205" }
-zcash_client_sqlite = { git = "https://github.com/zcash/librustzcash.git", rev = "7cbb2778843832e53b26470d95d28a4e73c93205" }
-zcash_primitives = { git = "https://github.com/zcash/librustzcash.git", rev = "7cbb2778843832e53b26470d95d28a4e73c93205" }
-zcash_proofs = { git = "https://github.com/zcash/librustzcash.git", rev = "7cbb2778843832e53b26470d95d28a4e73c93205" }
-zcash_address = { git = "https://github.com/zcash/librustzcash.git", rev = "7cbb2778843832e53b26470d95d28a4e73c93205" }
+zcash_client_backend = { git = "https://github.com/zcash/librustzcash.git", rev = "399313db0a3671c6b4b56f28841507fed6eb3ed6" }
+zcash_client_sqlite = { git = "https://github.com/zcash/librustzcash.git", rev = "399313db0a3671c6b4b56f28841507fed6eb3ed6" }
+zcash_primitives = { git = "https://github.com/zcash/librustzcash.git", rev = "399313db0a3671c6b4b56f28841507fed6eb3ed6" }
+zcash_proofs = { git = "https://github.com/zcash/librustzcash.git", rev = "399313db0a3671c6b4b56f28841507fed6eb3ed6" }
+zcash_address = { git = "https://github.com/zcash/librustzcash.git", rev = "399313db0a3671c6b4b56f28841507fed6eb3ed6" }

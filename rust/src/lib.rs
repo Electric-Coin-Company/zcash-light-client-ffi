@@ -1949,6 +1949,17 @@ pub struct FFIBlockMeta {
     orchard_actions_count: u32,
 }
 
+/// # Safety
+/// Initializes the `FsBlockDb` sqlite database. Does nothing if already created
+///
+/// Returns true when successful, false otherwise. When false is returned caller 
+/// should check for errors.
+/// - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
+///   alignment of `1`. Its contents must be a string representing a valid system path in the
+///   operating system's preferred representation.
+/// - The memory referenced by `fs_block_db_root` must not be mutated for the duration of the function call.
+/// - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_init_block_metadata_db(
     fs_block_db_root: *const u8,
@@ -1968,6 +1979,24 @@ pub unsafe extern "C" fn zcashlc_init_block_metadata_db(
     unwrap_exc_or(res, false)
 }
 
+/// Writes the blocks provided in `blocks_meta` into the `BlockMeta` database
+/// 
+/// Returns true if the `blocks_meta` could be stored into the `FsBlockDb`. False
+/// otherwise. 
+/// 
+/// When false is returned caller should check for errors. 
+/// 
+/// # Safety
+///
+/// - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
+///   alignment of `1`. Its contents must be a string representing a valid system path in the
+///   operating system's preferred representation.
+/// - The memory referenced by `fs_block_db_root` must not be mutated for the duration of the function call.
+/// - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+/// - Block metadata represented in `blocks_meta` must be non-null. Caller must guarantee that the 
+/// memory reference by this pointer is not freed up, dereferenced or invalidated while this function
+/// is invoked.
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_write_block_metadata(
     fs_block_db_root: *const u8,
@@ -2019,11 +2048,11 @@ pub unsafe extern "C" fn zcashlc_write_block_metadata(
 ///
 /// # Safety
 ///
-/// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+/// - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
 ///   alignment of `1`. Its contents must be a string representing a valid system path in the
 ///   operating system's preferred representation.
-/// - The memory referenced by `db_data` must not be mutated for the duration of the function call.
-/// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+/// - The memory referenced by `fs_block_db_root` must not be mutated for the duration of the function call.
+/// - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
 ///   documentation of pointer::offset.
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_rewind_fs_block_cache_to_height(

@@ -2072,6 +2072,50 @@ pub unsafe extern "C" fn zcashlc_rewind_fs_block_cache_to_height(
     unwrap_exc_or(res, false)
 }
 
+/// Get the latest cached block height in the filesystem block cache
+/// 
+/// Returns a blockheight or -1 if empty
+/// 
+/// # Safety
+///
+/// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+///   alignment of `1`. Its contents must be a string representing a valid system path in the
+///   operating system's preferred representation.
+/// - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+/// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+/// - `tx` must be non-null and valid for reads for `tx_len` bytes, and it must have an
+///   alignment of `1`.
+/// - The memory referenced by `tx` must not be mutated for the duration of the function call.
+/// - The total size `tx_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_latest_cached_block_height(
+    fs_block_db_root: *const u8,
+    fs_block_db_root_len: usize,
+) -> i32 {
+    let res = catch_panic(|| {
+
+        let block_db = block_db(fs_block_db_root, fs_block_db_root_len)?;
+        
+        block_db
+            .get_max_cached_height()
+            .map(|h| {
+                match h {
+                    Some(height) => {
+                        let height_u32 = u32::from(height);
+                        height_u32 as i32
+                    },
+                    None => -1
+                }
+            })
+            .map_err(|e| format_err!("Could not retrieve latest height from FsBlockDb. Error: {}", e))
+    });
+
+    unwrap_exc_or(res, -1)
+    
+}
+
 /// Decrypts whatever parts of the specified transaction it can and stores them in db_data.
 ///
 /// # Safety

@@ -4,7 +4,6 @@ use failure::format_err;
 use ffi_helpers::panic::catch_panic;
 use schemer::MigratorError;
 use secrecy::Secret;
-use zcash_primitives::transaction::components::amount::NonNegativeAmount;
 use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::ffi::{CStr, CString, OsStr};
@@ -13,6 +12,7 @@ use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::slice;
+use zcash_primitives::transaction::components::amount::NonNegativeAmount;
 
 use zcash_address::{
     self,
@@ -38,7 +38,7 @@ use zcash_client_backend::{
 #[allow(deprecated)]
 use zcash_client_sqlite::wallet::get_rewind_height;
 use zcash_client_sqlite::{
-    chain::{BlockMeta, init::init_blockmeta_db},
+    chain::{init::init_blockmeta_db, BlockMeta},
     wallet::init::{init_accounts_table, init_blocks_table, init_wallet_db, WalletMigrationError},
     FsBlockDb, NoteId, WalletDb,
 };
@@ -1680,7 +1680,7 @@ pub unsafe extern "C" fn zcashlc_validate_combined_chain(
 ) -> i32 {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
-        let block_db = block_db(fs_block_db_root, fs_block_db_root_len)? ;
+        let block_db = block_db(fs_block_db_root, fs_block_db_root_len)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
         let validate_from = (&db_data)
@@ -1912,9 +1912,7 @@ pub unsafe extern "C" fn zcashlc_put_utxo(
     unwrap_exc_or(res, false)
 }
 
-
-
-// 
+//
 // FsBlock Interfaces
 //
 
@@ -1952,7 +1950,7 @@ pub struct FFIBlockMeta {
 /// # Safety
 /// Initializes the `FsBlockDb` sqlite database. Does nothing if already created
 ///
-/// Returns true when successful, false otherwise. When false is returned caller 
+/// Returns true when successful, false otherwise. When false is returned caller
 /// should check for errors.
 /// - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
 ///   alignment of `1`. Its contents must be a string representing a valid system path in the
@@ -1980,12 +1978,12 @@ pub unsafe extern "C" fn zcashlc_init_block_metadata_db(
 }
 
 /// Writes the blocks provided in `blocks_meta` into the `BlockMeta` database
-/// 
+///
 /// Returns true if the `blocks_meta` could be stored into the `FsBlockDb`. False
-/// otherwise. 
-/// 
-/// When false is returned caller should check for errors. 
-/// 
+/// otherwise.
+///
+/// When false is returned caller should check for errors.
+///
 /// # Safety
 ///
 /// - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
@@ -1994,7 +1992,7 @@ pub unsafe extern "C" fn zcashlc_init_block_metadata_db(
 /// - The memory referenced by `fs_block_db_root` must not be mutated for the duration of the function call.
 /// - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
 ///   documentation of pointer::offset.
-/// - Block metadata represented in `blocks_meta` must be non-null. Caller must guarantee that the 
+/// - Block metadata represented in `blocks_meta` must be non-null. Caller must guarantee that the
 /// memory reference by this pointer is not freed up, dereferenced or invalidated while this function
 /// is invoked.
 #[no_mangle]
@@ -2004,31 +2002,30 @@ pub unsafe extern "C" fn zcashlc_write_block_metadata(
     blocks_meta: *mut FFIBlocksMeta,
 ) -> bool {
     let res = catch_panic(|| {
-
         let block_db = block_db(fs_block_db_root, fs_block_db_root_len)?;
 
         let blocks_meta: Box<FFIBlocksMeta> = unsafe { Box::from_raw(blocks_meta) };
-        
-        let blocks_metadata_slice: &mut [FFIBlockMeta] = unsafe { slice::from_raw_parts_mut(blocks_meta.ptr, blocks_meta.len) };
-        
+
+        let blocks_metadata_slice: &mut [FFIBlockMeta] =
+            unsafe { slice::from_raw_parts_mut(blocks_meta.ptr, blocks_meta.len) };
+
         let mut blocks = Vec::with_capacity(blocks_metadata_slice.len());
-        
+
         for b in blocks_metadata_slice {
-            let block_hash_bytes = unsafe { slice::from_raw_parts(b.block_hash_ptr, b.block_hash_ptr_len) };
+            let block_hash_bytes =
+                unsafe { slice::from_raw_parts(b.block_hash_ptr, b.block_hash_ptr_len) };
             let mut hash = [0u8; 32];
             hash.copy_from_slice(block_hash_bytes);
 
-            blocks.push(
-                BlockMeta {
-                    height: BlockHeight::from_u32(b.height),
-                    block_hash: BlockHash(hash),
-                    block_time: b.block_time,
-                    sapling_outputs_count: b.sapling_outputs_count,
-                    orchard_actions_count: b.orchard_actions_count,
-                } 
-            );
+            blocks.push(BlockMeta {
+                height: BlockHeight::from_u32(b.height),
+                block_hash: BlockHash(hash),
+                block_time: b.block_time,
+                sapling_outputs_count: b.sapling_outputs_count,
+                orchard_actions_count: b.orchard_actions_count,
+            });
         }
-        
+
         match block_db.write_block_metadata(&blocks) {
             Ok(()) => Ok(true),
             Err(e) => Err(format_err!(
@@ -2039,7 +2036,6 @@ pub unsafe extern "C" fn zcashlc_write_block_metadata(
     });
     unwrap_exc_or(res, false)
 }
-
 
 /// Rewinds the data database to the given height.
 ///
@@ -2061,7 +2057,6 @@ pub unsafe extern "C" fn zcashlc_rewind_fs_block_cache_to_height(
     height: i32,
 ) -> bool {
     let res = catch_panic(|| {
-
         let block_db = block_db(fs_block_db_root, fs_block_db_root_len)?;
         let height = BlockHeight::try_from(height)?;
         block_db
@@ -2073,9 +2068,9 @@ pub unsafe extern "C" fn zcashlc_rewind_fs_block_cache_to_height(
 }
 
 /// Get the latest cached block height in the filesystem block cache
-/// 
+///
 /// Returns a positive blockheight or -1 if empty or an error occurred.
-/// 
+///
 /// # Safety
 ///
 /// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
@@ -2095,9 +2090,8 @@ pub unsafe extern "C" fn zcashlc_latest_cached_block_height(
     fs_block_db_root_len: usize,
 ) -> i32 {
     let res = catch_panic(|| {
-
         let block_db = block_db(fs_block_db_root, fs_block_db_root_len)?;
-        
+
         match block_db.get_max_cached_height() {
             Ok(Some(block_height)) => Ok(u32::from(block_height) as i32),
             Ok(None) => Ok(-1),
@@ -2388,9 +2382,9 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
                 .map_err(|e| format_err!("Invalid MemoBytes {}", e))?
         };
 
-        let shielding_threshold =
-            NonNegativeAmount::from_u64(shielding_threshold).map_err(|()| format_err!("Invalid amount, out of range"))?;
-    
+        let shielding_threshold = NonNegativeAmount::from_u64(shielding_threshold)
+            .map_err(|()| format_err!("Invalid amount, out of range"))?;
+
         let spend_params = Path::new(OsStr::from_bytes(unsafe {
             slice::from_raw_parts(spend_params, spend_params_len)
         }));

@@ -2074,7 +2074,7 @@ pub unsafe extern "C" fn zcashlc_rewind_fs_block_cache_to_height(
 
 /// Get the latest cached block height in the filesystem block cache
 /// 
-/// Returns a blockheight or -1 if empty
+/// Returns a positive blockheight or -1 if empty or an error occurred.
 /// 
 /// # Safety
 ///
@@ -2098,22 +2098,17 @@ pub unsafe extern "C" fn zcashlc_latest_cached_block_height(
 
         let block_db = block_db(fs_block_db_root, fs_block_db_root_len)?;
         
-        block_db
-            .get_max_cached_height()
-            .map(|h| {
-                match h {
-                    Some(height) => {
-                        let height_u32 = u32::from(height);
-                        height_u32 as i32
-                    },
-                    None => -1
-                }
-            })
-            .map_err(|e| format_err!("Could not retrieve latest height from FsBlockDb. Error: {}", e))
+        match block_db.get_max_cached_height() {
+            Ok(Some(block_height)) => Ok(u32::from(block_height) as i32),
+            Ok(None) => Ok(-1),
+            Err(e) => Err(format_err!(
+                "Failed to read block metadata from FsBlockDb: {:?}",
+                e
+            )),
+        }
     });
 
     unwrap_exc_or(res, -1)
-    
 }
 
 /// Decrypts whatever parts of the specified transaction it can and stores them in db_data.

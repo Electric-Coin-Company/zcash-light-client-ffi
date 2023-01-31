@@ -8,6 +8,26 @@ This project is designed for two things:
 Currently implemented is building for apple platforms as an `xcframework` and for distribution via Swift Package Manager.
 
 
+## importing the package
+Add the package as a dependency
+````Swift
+dependencies: [
+  .package(url: "https://github.com/zcash-hackworks/zcash-light-client-ffi", from: "0.1.2")
+  // other dependencies
+]
+````
+
+and reference it as product in the target that it will be used
+
+````Swift
+targets: [
+        .target(
+            name: "MyTarget",
+            dependencies: [
+                .product(name: "libzcashlc", package: "zcash-light-client-ffi")
+            ],
+````
+
 ## Building
 
 ### Pre-requisites

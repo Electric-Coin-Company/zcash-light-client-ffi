@@ -58,8 +58,6 @@ use zcash_primitives::{
 };
 use zcash_proofs::prover::LocalTxProver;
 
-const ANCHOR_OFFSET: u32 = 10;
-
 fn unwrap_exc_or<T>(exc: Result<T, ()>, def: T) -> T {
     match exc {
         Ok(value) => value,
@@ -2371,6 +2369,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
     output_params: *const u8,
     output_params_len: usize,
     network_id: u32,
+    min_confirmations: u32,
     use_zip317_fees: bool,
 ) -> i64 {
     let res = catch_panic(|| {
@@ -2441,7 +2440,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
                 &usk,
                 &taddrs,
                 &memo_bytes,
-                ANCHOR_OFFSET,
+                min_confirmations,
             )
             .map_err(|e| format_err!("Error while shielding transaction: {}", e))
         } else {
@@ -2459,7 +2458,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
                 &usk,
                 &taddrs,
                 &memo_bytes,
-                ANCHOR_OFFSET,
+                min_confirmations,
             )
             .map_err(|e| format_err!("Error while shielding transaction: {}", e))
         }

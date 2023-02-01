@@ -11,6 +11,11 @@ Declare `repr(C)` structs for FFI:
 
 expose shielding threshold for `shield_funds`
 
+- [#81] Adopt latest crate versions
+Bumped dependencies to `zcash_primitives 0.10`, `zcash_client_backend 0.7`,
+`zcash_proofs 0.10`, `zcash_client_sqlite 0.5.0`
+
+this adds support for `min_confirmations` on `shield_funds` and `shielding_threshold`.
 - [#78] removing cocoapods support
 # 0.1.1
 

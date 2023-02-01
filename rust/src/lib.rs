@@ -1676,6 +1676,7 @@ pub unsafe extern "C" fn zcashlc_validate_combined_chain(
     fs_block_db_root_len: usize,
     db_data: *const u8,
     db_data_len: usize,
+    validate_limit: u32,
     network_id: u32,
 ) -> i32 {
     let res = catch_panic(|| {
@@ -1687,7 +1688,13 @@ pub unsafe extern "C" fn zcashlc_validate_combined_chain(
             .get_max_height_hash()
             .map_err(|e| format_err!("Error while validating chain: {}", e))?;
 
-        let val_res = validate_chain(&network, &block_db, validate_from);
+        let limit = if validate_limit == 0 {
+            None
+        } else {
+            Some(validate_limit)
+        };
+
+        let val_res = validate_chain(&block_db, validate_from, limit);
 
         if let Err(e) = val_res {
             match e {

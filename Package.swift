@@ -3,10 +3,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "libzcashlc",
+    name: "zcash-light-client-ffi",
     products: [
         .library(
-            name: "libzcashlc",
+            name: "zcash-light-client-ffi",
             targets: ["libzcashlc"]
         ),
     ],

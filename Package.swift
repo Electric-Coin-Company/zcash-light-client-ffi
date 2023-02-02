@@ -6,7 +6,7 @@ let package = Package(
     name: "zcash-light-client-ffi",
     products: [
         .library(
-            name: "zcash-light-client-ffi",
+            name: "libzcashlc",
             targets: ["libzcashlc"]
         ),
     ],

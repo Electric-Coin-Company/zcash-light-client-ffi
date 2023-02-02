@@ -52,6 +52,20 @@ typedef struct {
   uintptr_t len;
 } FFIEncodedKeys;
 
+typedef struct {
+  uint32_t height;
+  uint8_t *block_hash_ptr;
+  uintptr_t block_hash_ptr_len;
+  uint32_t block_time;
+  uint32_t sapling_outputs_count;
+  uint32_t orchard_actions_count;
+} FFIBlockMeta;
+
+typedef struct {
+  FFIBlockMeta *ptr;
+  uintptr_t len;
+} FFIBlocksMeta;
+
 int32_t zcashlc_branch_id_for_height(int32_t height, uint32_t network_id);
 
 /**
@@ -590,6 +604,22 @@ bool zcashlc_init_accounts_table_with_keys(const uint8_t *db_data,
                                            uint32_t network_id);
 
 /**
+ * # Safety
+ * Initializes the `FsBlockDb` sqlite database. Does nothing if already created
+ *
+ * Returns true when successful, false otherwise. When false is returned caller
+ * should check for errors.
+ * - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `fs_block_db_root` must not be mutated for the duration of the function call.
+ * - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ */
+bool zcashlc_init_block_metadata_db(const uint8_t *fs_block_db_root,
+                                    uintptr_t fs_block_db_root_len);
+
+/**
  * Initialises the data database with the given block metadata.
  *
  * This enables a newly-created database to be immediately-usable, without needing to
@@ -722,6 +752,28 @@ bool zcashlc_is_valid_viewing_key(const char *key, uint32_t network_id);
 int32_t zcashlc_last_error_length(void);
 
 /**
+ * Get the latest cached block height in the filesystem block cache
+ *
+ * Returns a positive blockheight or -1 if empty or an error occurred.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `tx` must be non-null and valid for reads for `tx_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `tx` must not be mutated for the duration of the function call.
+ * - The total size `tx_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ */
+int32_t zcashlc_latest_cached_block_height(const uint8_t *fs_block_db_root,
+                                           uintptr_t fs_block_db_root_len);
+
+/**
  * Returns a list of the transparent receivers for the diversified unified addresses that have
  * been allocated for the provided account.
  *
@@ -782,6 +834,25 @@ bool zcashlc_put_utxo(const uint8_t *db_data,
  *
  * # Safety
  *
+ * - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `fs_block_db_root` must not be mutated for the duration of the function call.
+ * - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ */
+bool zcashlc_rewind_fs_block_cache_to_height(const uint8_t *fs_block_db_root,
+                                             uintptr_t fs_block_db_root_len,
+                                             int32_t height);
+
+/**
+ * Rewinds the data database to the given height.
+ *
+ * If the requested height is greater than or equal to the height of the last scanned
+ * block, this function does nothing.
+ *
+ * # Safety
+ *
  * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
  *   alignment of `1`. Its contents must be a string representing a valid system path in the
  *   operating system's preferred representation.
@@ -812,11 +883,11 @@ bool zcashlc_rewind_to_height(const uint8_t *db_data,
  *
  * # Safety
  *
- * - `db_cache` must be non-null and valid for reads for `db_cache_len` bytes, and it must have an
+ * - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
  *   alignment of `1`. Its contents must be a string representing a valid system path in the
  *   operating system's preferred representation.
- * - The memory referenced by `db_cache` must not be mutated for the duration of the function call.
- * - The total size `db_cache_len` must be no larger than `isize::MAX`. See the safety
+ * - The memory referenced by `fs_block_db_root` must not be mutated for the duration of the function call.
+ * - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
  *   alignment of `1`. Its contents must be a string representing a valid system path in the
@@ -825,8 +896,8 @@ bool zcashlc_rewind_to_height(const uint8_t *db_data,
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  */
-int32_t zcashlc_scan_blocks(const uint8_t *db_cache,
-                            uintptr_t db_cache_len,
+int32_t zcashlc_scan_blocks(const uint8_t *fs_block_cache_root,
+                            uintptr_t fs_block_cache_root_len,
                             const uint8_t *db_data,
                             uintptr_t db_data_len,
                             uint32_t scan_limit,
@@ -850,6 +921,7 @@ int32_t zcashlc_scan_blocks(const uint8_t *db_cache,
  * - The memory referenced by `usk_ptr` must not be mutated for the duration of the function call.
  * - The total size `usk_len` must be no larger than `isize::MAX`. See the safety documentation
  * - `memo` must either be null (indicating an empty memo) or point to a 512-byte array.
+ * - `shielding_threshold` a non-negative shielding threshold amount in zatoshi
  * - `spend_params` must be non-null and valid for reads for `spend_params_len` bytes, and it must have an
  *   alignment of `1`. Its contents must be the Sapling spend proving parameters.
  * - The memory referenced by `spend_params` must not be mutated for the duration of the function call.
@@ -866,11 +938,13 @@ int64_t zcashlc_shield_funds(const uint8_t *db_data,
                              const uint8_t *usk_ptr,
                              uintptr_t usk_len,
                              const uint8_t *memo,
+                             uint64_t shielding_threshold,
                              const uint8_t *spend_params,
                              uintptr_t spend_params_len,
                              const uint8_t *output_params,
                              uintptr_t output_params_len,
                              uint32_t network_id,
+                             uint32_t min_confirmations,
                              bool use_zip317_fees);
 
 /**
@@ -903,10 +977,10 @@ void zcashlc_string_free(char *s);
 
 /**
  * Checks that the scanned blocks in the data database, when combined with the recent
- * `CompactBlock`s in the cache database, form a valid chain.
+ * `CompactBlock`s in the block cache, form a valid chain.
  *
  * This function is built on the core assumption that the information provided in the
- * cache database is more likely to be accurate than the previously-scanned information.
+ * block cache is more likely to be accurate than the previously-scanned information.
  * This follows from the design (and trust) assumption that the `lightwalletd` server
  * provides accurate block information as of the time it was requested.
  *
@@ -914,18 +988,18 @@ void zcashlc_string_free(char *s);
  * - `-1` if the combined chain is valid.
  * - `upper_bound` if the combined chain is invalid.
  *   `upper_bound` is the height of the highest invalid block (on the assumption that the
- *   highest block in the cache database is correct).
+ *   highest block in the block cache is correct).
  * - `0` if there was an error during validation unrelated to chain validity.
  *
  * This function does not mutate either of the databases.
  *
  * # Safety
  *
- * - `db_cache` must be non-null and valid for reads for `db_cache_len` bytes, and it must have an
+ * - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
  *   alignment of `1`. Its contents must be a string representing a valid system path in the
  *   operating system's preferred representation.
- * - The memory referenced by `db_cache` must not be mutated for the duration of the function call.
- * - The total size `db_cache_len` must be no larger than `isize::MAX`. See the safety
+ * - The memory referenced by `fs_block_db_root` must not be mutated for the duration of the function call.
+ * - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
  *   alignment of `1`. Its contents must be a string representing a valid system path in the
@@ -934,8 +1008,33 @@ void zcashlc_string_free(char *s);
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  */
-int32_t zcashlc_validate_combined_chain(const uint8_t *db_cache,
-                                        uintptr_t db_cache_len,
+int32_t zcashlc_validate_combined_chain(const uint8_t *fs_block_db_root,
+                                        uintptr_t fs_block_db_root_len,
                                         const uint8_t *db_data,
                                         uintptr_t db_data_len,
+                                        uint32_t validate_limit,
                                         uint32_t network_id);
+
+/**
+ * Writes the blocks provided in `blocks_meta` into the `BlockMeta` database
+ *
+ * Returns true if the `blocks_meta` could be stored into the `FsBlockDb`. False
+ * otherwise.
+ *
+ * When false is returned caller should check for errors.
+ *
+ * # Safety
+ *
+ * - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `fs_block_db_root` must not be mutated for the duration of the function call.
+ * - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - Block metadata represented in `blocks_meta` must be non-null. Caller must guarantee that the
+ * memory reference by this pointer is not freed up, dereferenced or invalidated while this function
+ * is invoked.
+ */
+bool zcashlc_write_block_metadata(const uint8_t *fs_block_db_root,
+                                  uintptr_t fs_block_db_root_len,
+                                  FFIBlocksMeta *blocks_meta);

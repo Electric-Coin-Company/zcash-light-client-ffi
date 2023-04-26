@@ -904,6 +904,17 @@ int32_t zcashlc_scan_blocks(const uint8_t *fs_block_cache_root,
                             uint32_t network_id);
 
 /**
+ * - `seed` must be non-null and valid for reads for `seed_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `seed` must not be mutated for the duration of the function call.
+ * - The total size `seed_len` must be at least 32 no larger than `252`. See the safety documentation
+ *   of pointer::offset.
+ */
+bool zcashlc_seed_fingerprint(const uint8_t *seed,
+                              uintptr_t seed_len,
+                              uint8_t *signature_bytes_ret);
+
+/**
  * Shield transparent UTXOs by sending them to an address associated with the specified Sapling
  * spending key.
  *

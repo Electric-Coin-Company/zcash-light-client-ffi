@@ -1,6 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
-use failure::format_err;
+use anyhow::anyhow;
 use ffi_helpers::panic::catch_panic;
 use schemer::MigratorError;
 use secrecy::Secret;
@@ -89,12 +89,12 @@ unsafe fn wallet_db(
     db_data: *const u8,
     db_data_len: usize,
     network: Network,
-) -> Result<WalletDb<Network>, failure::Error> {
+) -> anyhow::Result<WalletDb<Network>> {
     let db_data = Path::new(OsStr::from_bytes(unsafe {
         slice::from_raw_parts(db_data, db_data_len)
     }));
     WalletDb::for_path(db_data, network)
-        .map_err(|e| format_err!("Error opening wallet database connection: {}", e))
+        .map_err(|e| anyhow!("Error opening wallet database connection: {}", e))
 }
 
 /// Helper method for construcing a FsBlockDb value from path data provided over the FFI.
@@ -107,12 +107,12 @@ unsafe fn wallet_db(
 /// - The memory referenced by `fsblock_db` must not be mutated for the duration of the function call.
 /// - The total size `fsblock_db_len` must be no larger than `isize::MAX`. See the safety
 ///   documentation of pointer::offset.
-fn block_db(fsblock_db: *const u8, fsblock_db_len: usize) -> Result<FsBlockDb, failure::Error> {
+fn block_db(fsblock_db: *const u8, fsblock_db_len: usize) -> anyhow::Result<FsBlockDb> {
     let cache_db = Path::new(OsStr::from_bytes(unsafe {
         slice::from_raw_parts(fsblock_db, fsblock_db_len)
     }));
     FsBlockDb::for_path(cache_db)
-        .map_err(|e| format_err!("Error opening block source database connection: {}", e))
+        .map_err(|e| anyhow!("Error opening block source database connection: {}", e))
 }
 
 /// Returns the length of the last error message to be logged.
@@ -184,7 +184,7 @@ pub unsafe extern "C" fn zcashlc_init_data_database(
         match init_wallet_db(&mut db_data, seed) {
             Ok(_) => Ok(0),
             Err(MigratorError::Adapter(WalletMigrationError::SeedRequired)) => Ok(1),
-            Err(e) => Err(format_err!("Error while initializing data DB: {}", e)),
+            Err(e) => Err(anyhow!("Error while initializing data DB: {}", e)),
         }
     });
     unwrap_exc_or(res, -1)
@@ -282,7 +282,7 @@ pub unsafe extern "C" fn zcashlc_create_account(
                 let encoded = usk.to_bytes(Era::Orchard);
                 Box::into_raw(Box::new(FFIBinaryKey::new(account, encoded)))
             })
-            .map_err(|e| format_err!("Error while initializing accounts: {}", e))
+            .map_err(|e| anyhow!("Error while initializing accounts: {}", e))
     });
     unwrap_exc_or_null(res)
 }
@@ -393,12 +393,11 @@ pub unsafe extern "C" fn zcashlc_init_accounts_table_with_keys(
                     .map(|ufvk| (AccountId::from(u.account_id), ufvk))
             })
             .collect::<Result<HashMap<_, _>, _>>()
-            .map_err(|e| format_err!("Error decoding unified full viewing keys: {:?}", e))?;
+            .map_err(|e| anyhow!("Error decoding unified full viewing keys: {:?}", e))?;
 
-        match init_accounts_table(&db_data, &ufvks) {
-            Ok(()) => Ok(true),
-            Err(e) => Err(format_err!("Error while initializing accounts: {}", e)),
-        }
+        init_accounts_table(&db_data, &ufvks)
+            .map(|()| true)
+            .map_err(|e| anyhow!("Error while initializing accounts: {}", e))
     });
     unwrap_exc_or(res, false)
 }
@@ -430,12 +429,12 @@ pub unsafe extern "C" fn zcashlc_derive_spending_key(
         let account = if account >= 0 {
             account as u32
         } else {
-            return Err(format_err!("account ID argument must be nonnegative"));
+            return Err(anyhow!("account ID argument must be nonnegative"));
         };
 
         let account = AccountId::from(account);
         UnifiedSpendingKey::from_seed(&network, seed, account)
-            .map_err(|e| format_err!("error generating unified spending key from seed: {:?}", e))
+            .map_err(|e| anyhow!("error generating unified spending key from seed: {:?}", e))
             .map(move |usk| {
                 let encoded = usk.to_bytes(Era::Orchard);
                 Box::into_raw(Box::new(FFIBinaryKey::new(account, encoded)))
@@ -456,20 +455,17 @@ pub unsafe extern "C" fn zcashlc_derive_spending_key(
 /// - The memory referenced by `usk_ptr` must not be mutated for the duration of the function call.
 /// - The total size `usk_len` must be no larger than `isize::MAX`. See the safety documentation
 ///   of pointer::offset.
-unsafe fn decode_usk(
-    usk_ptr: *const u8,
-    usk_len: usize,
-) -> Result<UnifiedSpendingKey, failure::Error> {
+unsafe fn decode_usk(usk_ptr: *const u8, usk_len: usize) -> anyhow::Result<UnifiedSpendingKey> {
     let usk_bytes = unsafe { slice::from_raw_parts(usk_ptr, usk_len) };
 
     // The remainder of the function is safe.
     UnifiedSpendingKey::from_bytes(Era::Orchard, usk_bytes).map_err(|e| match e {
-        DecodingError::EraMismatch(era) => format_err!(
+        DecodingError::EraMismatch(era) => anyhow!(
             "Spending key was from era {:?}, but {:?} was expected.",
             era,
             Era::Orchard
         ),
-        e => format_err!(
+        e => anyhow!(
             "An error occurred decoding the provided unified spending key: {:?}",
             e
         ),
@@ -547,16 +543,15 @@ pub unsafe extern "C" fn zcashlc_init_blocks_table(
         let sapling_tree =
             hex::decode(unsafe { CStr::from_ptr(sapling_tree_hex) }.to_str()?).unwrap();
 
-        match init_blocks_table(
+        init_blocks_table(
             &db_data,
             BlockHeight::from_u32(height as u32),
             hash,
             time,
             &sapling_tree,
-        ) {
-            Ok(()) => Ok(1),
-            Err(e) => Err(format_err!("Error while initializing blocks table: {}", e)),
-        }
+        )
+        .map(|()| 1)
+        .map_err(|e| anyhow!("Error while initializing blocks table: {}", e))
     });
     unwrap_exc_or_null(res)
 }
@@ -586,7 +581,7 @@ pub unsafe extern "C" fn zcashlc_get_current_address(
         let account = if account >= 0 {
             account as u32
         } else {
-            return Err(format_err!("accounts argument must be positive"));
+            return Err(anyhow!("accounts argument must be positive"));
         };
 
         let account = AccountId::from(account);
@@ -596,11 +591,11 @@ pub unsafe extern "C" fn zcashlc_get_current_address(
                 let address_str = ua.encode(&network);
                 Ok(CString::new(address_str).unwrap().into_raw())
             }
-            Ok(None) => Err(format_err!(
+            Ok(None) => Err(anyhow!(
                 "No payment address was available for account {:?}",
                 account
             )),
-            Err(e) => Err(format_err!("Error while fetching address: {}", e)),
+            Err(e) => Err(anyhow!("Error while fetching address: {}", e)),
         }
     });
     unwrap_exc_or_null(res)
@@ -633,7 +628,7 @@ pub unsafe extern "C" fn zcashlc_get_next_available_address(
         let account = if account >= 0 {
             account as u32
         } else {
-            return Err(format_err!("Account id must be nonnegative."));
+            return Err(anyhow!("Account id must be nonnegative."));
         };
 
         let account = AccountId::from(account);
@@ -643,11 +638,11 @@ pub unsafe extern "C" fn zcashlc_get_next_available_address(
                 let address_str = ua.encode(&network);
                 Ok(CString::new(address_str).unwrap().into_raw())
             }
-            Ok(None) => Err(format_err!(
+            Ok(None) => Err(anyhow!(
                 "No payment address was available for account {:?}",
                 account
             )),
-            Err(e) => Err(format_err!("Error while fetching address: {}", e)),
+            Err(e) => Err(anyhow!("Error while fetching address: {}", e)),
         }
     });
     unwrap_exc_or_null(res)
@@ -679,7 +674,7 @@ pub unsafe extern "C" fn zcashlc_list_transparent_receivers(
         let account_id = if account_id >= 0 {
             account_id as u32
         } else {
-            return Err(format_err!("Account id must be nonnegative."));
+            return Err(anyhow!("Account id must be nonnegative."));
         };
 
         let account = AccountId::from(account_id);
@@ -698,7 +693,7 @@ pub unsafe extern "C" fn zcashlc_list_transparent_receivers(
 
                 Ok(FFIEncodedKeys::ptr_from_vec(keys))
             }
-            Err(e) => Err(format_err!("Error while fetching address: {}", e)),
+            Err(e) => Err(anyhow!("Error while fetching transparent receivers: {}", e)),
         }
     });
     unwrap_exc_or_null(res)
@@ -729,7 +724,7 @@ pub unsafe extern "C" fn zcashlc_get_typecodes_for_unified_address_receivers(
         let ua_str = unsafe { CStr::from_ptr(ua).to_str()? };
 
         let (_, ua) = unified::Address::decode(ua_str)
-            .map_err(|e| format_err!("Invalid Unified Address: {}", e))?;
+            .map_err(|e| anyhow!("Invalid Unified Address: {}", e))?;
 
         let typecodes = ua
             .items()
@@ -770,14 +765,14 @@ pub unsafe extern "C" fn zcashlc_free_typecodes(data: *mut u32, len: usize) {
 struct UnifiedAddressParser(UnifiedAddress);
 
 impl zcash_address::TryFromRawAddress for UnifiedAddressParser {
-    type Error = failure::Error;
+    type Error = anyhow::Error;
 
     fn try_from_raw_unified(
         data: zcash_address::unified::Address,
     ) -> Result<Self, zcash_address::ConversionError<Self::Error>> {
         data.try_into()
             .map(UnifiedAddressParser)
-            .map_err(|e| format_err!("Invalid Unified Address: {}", e).into())
+            .map_err(|e| anyhow!("Invalid Unified Address: {}", e).into())
     }
 }
 
@@ -798,8 +793,8 @@ pub unsafe extern "C" fn zcashlc_get_transparent_receiver_for_unified_address(
         let (network, ua) = match ZcashAddress::try_from_encoded(ua_str) {
             Ok(addr) => addr
                 .convert::<(_, UnifiedAddressParser)>()
-                .map_err(|e| format_err!("Not a Unified Address: {}", e)),
-            Err(e) => return Err(format_err!("Invalid Zcash address: {}", e)),
+                .map_err(|e| anyhow!("Not a Unified Address: {}", e)),
+            Err(e) => return Err(anyhow!("Invalid Zcash address: {}", e)),
         }?;
 
         if let Some(taddr) = ua.0.transparent() {
@@ -814,7 +809,7 @@ pub unsafe extern "C" fn zcashlc_get_transparent_receiver_for_unified_address(
 
             Ok(CString::new(taddr.encode())?.into_raw())
         } else {
-            Err(format_err!(
+            Err(anyhow!(
                 "Unified Address doesn't contain a transparent receiver"
             ))
         }
@@ -839,8 +834,8 @@ pub unsafe extern "C" fn zcashlc_get_sapling_receiver_for_unified_address(
         let (network, ua) = match ZcashAddress::try_from_encoded(ua_str) {
             Ok(addr) => addr
                 .convert::<(_, UnifiedAddressParser)>()
-                .map_err(|e| format_err!("Not a Unified Address: {}", e)),
-            Err(e) => return Err(format_err!("Invalid Zcash address: {}", e)),
+                .map_err(|e| anyhow!("Not a Unified Address: {}", e)),
+            Err(e) => return Err(anyhow!("Invalid Zcash address: {}", e)),
         }?;
 
         if let Some(addr) = ua.0.sapling() {
@@ -849,7 +844,7 @@ pub unsafe extern "C" fn zcashlc_get_sapling_receiver_for_unified_address(
                     .into_raw(),
             )
         } else {
-            Err(format_err!(
+            Err(anyhow!(
                 "Unified Address doesn't contain a Sapling receiver"
             ))
         }
@@ -989,7 +984,7 @@ pub unsafe extern "C" fn zcashlc_get_address_metadata(
                 zcash_address::Network::Main => 1,
                 zcash_address::Network::Test => 0,
                 zcash_address::Network::Regtest => {
-                    return Err(format_err!("Regtest addresses are not supported."));
+                    return Err(anyhow!("Regtest addresses are not supported."));
                 }
             };
 
@@ -999,7 +994,7 @@ pub unsafe extern "C" fn zcashlc_get_address_metadata(
                 AddressType::Sapling => 2,
                 AddressType::Unified => 3,
                 AddressType::Sprout => {
-                    return Err(format_err!("Sprout addresses are not supported."));
+                    return Err(anyhow!("Sprout addresses are not supported."));
                 }
             };
         }
@@ -1163,19 +1158,19 @@ pub unsafe extern "C" fn zcashlc_get_balance(
         if account >= 0 {
             let (_, max_height) = (&db_data)
                 .block_height_extrema()
-                .map_err(|e| format_err!("Error while fetching max block height: {}", e))
+                .map_err(|e| anyhow!("Error while fetching max block height: {}", e))
                 .and_then(|opt| {
                     opt.ok_or_else(|| {
-                        format_err!("No blockchain information available; scan required.")
+                        anyhow!("No blockchain information available; scan required.")
                     })
                 })?;
 
             (&db_data)
                 .get_balance_at(AccountId::from(account as u32), max_height)
                 .map(|b| b.into())
-                .map_err(|e| format_err!("Error while fetching balance: {}", e))
+                .map_err(|e| anyhow!("Error while fetching balance: {}", e))
         } else {
-            Err(format_err!("account argument must be positive"))
+            Err(anyhow!("account argument must be positive"))
         }
     });
     unwrap_exc_or(res, -1)
@@ -1206,20 +1201,20 @@ pub unsafe extern "C" fn zcashlc_get_verified_balance(
         if account >= 0 {
             (&db_data)
                 .get_target_and_anchor_heights(min_confirmations)
-                .map_err(|e| format_err!("Error while fetching anchor height: {}", e))
+                .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
                 .and_then(|opt_anchor| {
                     opt_anchor
                         .map(|(_, a)| a)
-                        .ok_or_else(|| format_err!("Anchor height not available; scan required."))
+                        .ok_or_else(|| anyhow!("Anchor height not available; scan required."))
                 })
                 .and_then(|anchor| {
                     (&db_data)
                         .get_balance_at(AccountId::from(account as u32), anchor)
-                        .map_err(|e| format_err!("Error while fetching verified balance: {}", e))
+                        .map_err(|e| anyhow!("Error while fetching verified balance: {}", e))
                 })
                 .map(|amount| amount.into())
         } else {
-            Err(format_err!("account argument must be positive"))
+            Err(anyhow!("account argument must be positive"))
         }
     });
     unwrap_exc_or(res, -1)
@@ -1253,23 +1248,23 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance(
         let taddr = TransparentAddress::decode(&network, addr).unwrap();
         let amount = (&db_data)
             .get_target_and_anchor_heights(min_confirmations)
-            .map_err(|e| format_err!("Error while fetching anchor height: {}", e))
+            .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
             .and_then(|opt_anchor| {
                 opt_anchor
                     .map(|(_, a)| a)
-                    .ok_or_else(|| format_err!("height not available; scan required."))
+                    .ok_or_else(|| anyhow!("height not available; scan required."))
             })
             .and_then(|anchor| {
                 (&db_data)
                     .get_unspent_transparent_outputs(&taddr, anchor, &[])
                     .map_err(|e| {
-                        format_err!("Error while fetching verified transparent balance: {}", e)
+                        anyhow!("Error while fetching verified transparent balance: {}", e)
                     })
             })?
             .iter()
             .map(|utxo| utxo.txout().value)
             .sum::<Option<Amount>>()
-            .ok_or_else(|| format_err!("Balance overflowed MAX_MONEY."))?;
+            .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
         Ok(amount.into())
     });
@@ -1303,24 +1298,24 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
         let account = if account >= 0 {
             AccountId::from(account as u32)
         } else {
-            return Err(format_err!("account argument must be positive"));
+            return Err(anyhow!("account argument must be positive"));
         };
         let amount = (&db_data)
             .get_target_and_anchor_heights(min_confirmations)
-            .map_err(|e| format_err!("Error while fetching anchor height: {}", e))
+            .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
             .and_then(|opt_anchor| {
                 opt_anchor
                     .map(|(_, a)| a)
-                    .ok_or_else(|| format_err!("height not available; scan required."))
+                    .ok_or_else(|| anyhow!("height not available; scan required."))
             })
             .and_then(|anchor| {
                 db_data
                     .get_transparent_receivers(account)
                     .map_err(|e| {
-                        format_err!(
+                        anyhow!(
                             "Error while fetching transparent receivers for {:?}: {}",
                             account,
-                            e
+                            e,
                         )
                     })
                     .and_then(|receivers| {
@@ -1330,7 +1325,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
                                 db_data
                                     .get_unspent_transparent_outputs(&taddr, anchor, &[])
                                     .map_err(|e| {
-                                        format_err!(
+                                        anyhow!(
                                             "Error while fetching verified transparent balance: {}",
                                             e
                                         )
@@ -1343,7 +1338,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
             .flatten()
             .map(|utxo| utxo.txout().value)
             .sum::<Option<Amount>>()
-            .ok_or_else(|| format_err!("Balance overflowed MAX_MONEY."))?;
+            .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
         Ok(amount.into())
     });
@@ -1376,23 +1371,21 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance(
         let taddr = TransparentAddress::decode(&network, addr).unwrap();
         let amount = (&db_data)
             .get_target_and_anchor_heights(0u32)
-            .map_err(|e| format_err!("Error while fetching anchor height: {}", e))
+            .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
             .and_then(|opt_anchor| {
                 opt_anchor
                     .map(|(_, a)| a)
-                    .ok_or_else(|| format_err!("height not available; scan required."))
+                    .ok_or_else(|| anyhow!("height not available; scan required."))
             })
             .and_then(|anchor| {
                 (&db_data)
                     .get_unspent_transparent_outputs(&taddr, anchor, &[])
-                    .map_err(|e| {
-                        format_err!("Error while fetching total transparent balance: {}", e)
-                    })
+                    .map_err(|e| anyhow!("Error while fetching total transparent balance: {}", e))
             })?
             .iter()
             .map(|utxo| utxo.txout().value)
             .sum::<Option<Amount>>()
-            .ok_or_else(|| format_err!("Balance overflowed MAX_MONEY."))?;
+            .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
         Ok(amount.into())
     });
@@ -1424,31 +1417,31 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance_for_account(
         let account = if account >= 0 {
             AccountId::from(account as u32)
         } else {
-            return Err(format_err!("account argument must be positive"));
+            return Err(anyhow!("account argument must be positive"));
         };
         let amount = (&db_data)
             .get_target_and_anchor_heights(0u32)
-            .map_err(|e| format_err!("Error while fetching anchor height: {}", e))
+            .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
             .and_then(|opt_anchor| {
                 opt_anchor
                     .map(|(_, a)| a)
-                    .ok_or_else(|| format_err!("height not available; scan required."))
+                    .ok_or_else(|| anyhow!("height not available; scan required."))
             })
             .and_then(|anchor| {
                 db_data
                     .get_transparent_balances(account, anchor)
                     .map_err(|e| {
-                        format_err!(
+                        anyhow!(
                             "Error while fetching transparent balances for {:?}: {}",
                             account,
-                            e
+                            e,
                         )
                     })
             })?
             .iter()
             .map(|(_, value)| value)
             .sum::<Option<Amount>>()
-            .ok_or_else(|| format_err!("Balance overflowed MAX_MONEY."))?;
+            .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
         Ok(amount.into())
     });
@@ -1483,11 +1476,11 @@ pub unsafe extern "C" fn zcashlc_get_received_memo_as_utf8(
 
         let memo = (&db_data)
             .get_memo(NoteId::ReceivedNoteId(id_note))
-            .map_err(|e| format_err!("An error occurred retrieving the memo, {}", e))
+            .map_err(|e| anyhow!("An error occurred retrieving the memo: {}", e))
             .and_then(|memo| match memo {
                 Memo::Empty => Ok("".to_string()),
                 Memo::Text(memo) => Ok(memo.into()),
-                _ => Err(format_err!("This memo does not contain UTF-8 text")),
+                _ => Err(anyhow!("This memo does not contain UTF-8 text")),
             })?;
 
         Ok(CString::new(memo).unwrap().into_raw())
@@ -1554,7 +1547,7 @@ unsafe fn zcashlc_get_memo(
 
         let memo_bytes = (&db_data)
             .get_memo(note_id)
-            .map_err(|e| format_err!("An error occurred retrieving the memo, {}", e))
+            .map_err(|e| anyhow!("An error occurred retrieving the memo: {}", e))
             .map(|memo| memo.encode())?;
 
         unsafe { memo_bytes_ret.copy_from(memo_bytes.as_slice().as_ptr(), 512) };
@@ -1591,11 +1584,11 @@ pub unsafe extern "C" fn zcashlc_get_sent_memo_as_utf8(
 
         let memo = (&db_data)
             .get_memo(NoteId::SentNoteId(id_note))
-            .map_err(|e| format_err!("An error occurred retrieving the memo, {}", e))
+            .map_err(|e| anyhow!("An error occurred retrieving the memo: {}", e))
             .and_then(|memo| match memo {
                 Memo::Empty => Ok("".to_string()),
                 Memo::Text(memo) => Ok(memo.into()),
-                _ => Err(format_err!("This memo does not contain UTF-8 text")),
+                _ => Err(anyhow!("This memo does not contain UTF-8 text")),
             })?;
 
         Ok(CString::new(memo).unwrap().into_raw())
@@ -1653,7 +1646,7 @@ pub unsafe extern "C" fn zcashlc_seed_fingerprint(
 ) -> bool {
     let res = catch_panic(|| {
         if !(32..=252).contains(&seed_len) {
-            return Err(format_err!("Seed must be between 32 and 252 bytes long"));
+            return Err(anyhow!("Seed must be between 32 and 252 bytes long"));
         }
 
         let seed = Secret::new((unsafe { slice::from_raw_parts(seed, seed_len) }).to_vec());
@@ -1663,7 +1656,7 @@ pub unsafe extern "C" fn zcashlc_seed_fingerprint(
         let signature = match SeedFingerprint::from_seed(&seed.expose_secret()) {
             Some(fp) => fp,
 
-            None => return Err(format_err!("Could not create fingerprint")),
+            None => return Err(anyhow!("Could not create fingerprint")),
         };
 
         unsafe { signature_bytes_ret.copy_from(signature.to_bytes().as_ptr(), 32) }
@@ -1720,7 +1713,7 @@ pub unsafe extern "C" fn zcashlc_validate_combined_chain(
 
         let validate_from = (&db_data)
             .get_max_height_hash()
-            .map_err(|e| format_err!("Error while validating chain: {}", e))?;
+            .map_err(|e| anyhow!("Error while validating chain: {}", e))?;
 
         let limit = if validate_limit == 0 {
             None
@@ -1736,7 +1729,7 @@ pub unsafe extern "C" fn zcashlc_validate_combined_chain(
                     let height_u32 = u32::from(chain_error.at_height());
                     Ok(height_u32 as i32)
                 }
-                _ => Err(format_err!("Error while validating chain: {}", e)),
+                _ => Err(anyhow!("Error while validating chain: {}", e)),
             }
         } else {
             // All blocks are valid, so "highest invalid block height" is below genesis.
@@ -1786,7 +1779,7 @@ pub unsafe extern "C" fn zcashlc_get_nearest_rewind_height(
                     let rewind_height = u32::from(height);
                     Ok(rewind_height as i32)
                 }
-                Err(e) => Err(format_err!(
+                Err(e) => Err(anyhow!(
                     "Error while getting nearest rewind height for {}: {}",
                     height,
                     e
@@ -1826,7 +1819,7 @@ pub unsafe extern "C" fn zcashlc_rewind_to_height(
         db_data
             .truncate_to_height(height)
             .map(|_| true)
-            .map_err(|e| format_err!("Error while rewinding data DB to height {}: {}", height, e))
+            .map_err(|e| anyhow!("Error while rewinding data DB to height {}: {}", height, e))
     });
     unwrap_exc_or(res, false)
 }
@@ -1881,7 +1874,7 @@ pub unsafe extern "C" fn zcashlc_scan_blocks(
         };
         match scan_cached_blocks(&network, &block_db, &mut db_data, limit) {
             Ok(()) => Ok(1),
-            Err(e) => Err(format_err!("Error while scanning blocks: {}", e)),
+            Err(e) => Err(anyhow!("Error while scanning blocks: {}", e)),
         }
     });
     unwrap_exc_or_null(res)
@@ -1941,14 +1934,14 @@ pub unsafe extern "C" fn zcashlc_put_utxo(
             BlockHeight::from(height as u32),
         )
         .ok_or_else(|| {
-            format_err!(
+            anyhow!(
                 "{:?} is not a valid P2PKH or P2SH script_pubkey",
                 script_bytes
             )
         })?;
         match db_data.put_received_transparent_utxo(&output) {
             Ok(_) => Ok(true),
-            Err(e) => Err(format_err!("Error while inserting UTXO: {}", e)),
+            Err(e) => Err(anyhow!("Error while inserting UTXO: {}", e)),
         }
     });
     unwrap_exc_or(res, false)
@@ -2010,10 +2003,7 @@ pub unsafe extern "C" fn zcashlc_init_block_metadata_db(
 
         match init_blockmeta_db(&mut block_db) {
             Ok(()) => Ok(true),
-            Err(e) => Err(format_err!(
-                "Error while initializing block metadata DB: {}",
-                e
-            )),
+            Err(e) => Err(anyhow!("Error while initializing block metadata DB: {}", e)),
         }
     });
     unwrap_exc_or(res, false)
@@ -2070,7 +2060,7 @@ pub unsafe extern "C" fn zcashlc_write_block_metadata(
 
         match block_db.write_block_metadata(&blocks) {
             Ok(()) => Ok(true),
-            Err(e) => Err(format_err!(
+            Err(e) => Err(anyhow!(
                 "Failed to write block metadata to FsBlockDb: {:?}",
                 e
             )),
@@ -2104,7 +2094,7 @@ pub unsafe extern "C" fn zcashlc_rewind_fs_block_cache_to_height(
         block_db
             .truncate_to_height(height)
             .map(|_| true)
-            .map_err(|e| format_err!("Error while rewinding data DB to height {}: {}", height, e))
+            .map_err(|e| anyhow!("Error while rewinding data DB to height {}: {}", height, e))
     });
     unwrap_exc_or(res, false)
 }
@@ -2137,7 +2127,7 @@ pub unsafe extern "C" fn zcashlc_latest_cached_block_height(
         match block_db.get_max_cached_height() {
             Ok(Some(block_height)) => Ok(u32::from(block_height) as i32),
             Ok(None) => Ok(-1),
-            Err(e) => Err(format_err!(
+            Err(e) => Err(anyhow!(
                 "Failed to read block metadata from FsBlockDb: {:?}",
                 e
             )),
@@ -2187,7 +2177,7 @@ pub unsafe extern "C" fn zcashlc_decrypt_and_store_transaction(
 
         match decrypt_and_store_transaction(&network, &mut db_data, &tx) {
             Ok(()) => Ok(1),
-            Err(e) => Err(format_err!("Error while decrypting transaction: {}", e)),
+            Err(e) => Err(anyhow!("Error while decrypting transaction: {}", e)),
         }
     });
     unwrap_exc_or(res, -1)
@@ -2254,9 +2244,9 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
         let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
         let to = unsafe { CStr::from_ptr(to) }.to_str()?;
         let value =
-            Amount::from_i64(value).map_err(|()| format_err!("Invalid amount, out of range"))?;
+            Amount::from_i64(value).map_err(|()| anyhow!("Invalid amount, out of range"))?;
         if value.is_negative() {
-            return Err(format_err!("Amount is negative"));
+            return Err(anyhow!("Amount is negative"));
         }
         let spend_params = Path::new(OsStr::from_bytes(unsafe {
             slice::from_raw_parts(spend_params, spend_params_len)
@@ -2266,7 +2256,7 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
         }));
 
         let to = RecipientAddress::decode(&network, to)
-            .ok_or_else(|| format_err!("PaymentAddress is for the wrong network"))?;
+            .ok_or_else(|| anyhow!("PaymentAddress is for the wrong network"))?;
 
         let memo = match to {
             RecipientAddress::Shielded(_) | RecipientAddress::Unified(_) => {
@@ -2275,14 +2265,14 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
                 } else {
                     MemoBytes::from_bytes(unsafe { slice::from_raw_parts(memo, 512) })
                         .map(Some)
-                        .map_err(|e| format_err!("Invalid MemoBytes {}", e))
+                        .map_err(|e| anyhow!("Invalid MemoBytes: {}", e))
                 }
             }
             RecipientAddress::Transparent(_) => {
                 if memo.is_null() {
                     Ok(None)
                 } else {
-                    Err(format_err!(
+                    Err(anyhow!(
                         "Memos are not permitted when sending to transparent recipients."
                     ))
                 }
@@ -2299,7 +2289,7 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
             message: None,
             other_params: vec![],
         }])
-        .map_err(|e| format_err!("Error creating transaction request: {:?}", e))?;
+        .map_err(|e| anyhow!("Error creating transaction request: {:?}", e))?;
 
         if use_zip317_fees {
             let input_selector = GreedyInputSelector::new(
@@ -2317,7 +2307,7 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
                 OvkPolicy::Sender,
                 min_confirmations,
             )
-            .map_err(|e| format_err!("Error while sending funds: {}", e))
+            .map_err(|e| anyhow!("Error while sending funds: {}", e))
         } else {
             let input_selector = GreedyInputSelector::new(
                 fixed::SingleOutputChangeStrategy::new(FixedFeeRule::standard()),
@@ -2334,7 +2324,7 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
                 OvkPolicy::Sender,
                 min_confirmations,
             )
-            .map_err(|e| format_err!("Error while sending funds: {}", e))
+            .map_err(|e| anyhow!("Error while sending funds: {}", e))
         }
     });
     unwrap_exc_or(res, -1)
@@ -2414,7 +2404,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let mut update_ops = (&db_data)
             .get_update_ops()
-            .map_err(|e| format_err!("Could not obtain a writable database connection: {}", e))?;
+            .map_err(|e| anyhow!("Could not obtain a writable database connection: {}", e))?;
 
         let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
 
@@ -2422,11 +2412,11 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
             MemoBytes::empty()
         } else {
             MemoBytes::from_bytes(unsafe { slice::from_raw_parts(memo, 512) })
-                .map_err(|e| format_err!("Invalid MemoBytes {}", e))?
+                .map_err(|e| anyhow!("Invalid MemoBytes: {}", e))?
         };
 
         let shielding_threshold = NonNegativeAmount::from_u64(shielding_threshold)
-            .map_err(|()| format_err!("Invalid amount, out of range"))?;
+            .map_err(|()| anyhow!("Invalid amount, out of range"))?;
 
         let spend_params = Path::new(OsStr::from_bytes(unsafe {
             slice::from_raw_parts(spend_params, spend_params_len)
@@ -2437,24 +2427,24 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
 
         let account = db_data
             .get_account_for_ufvk(&usk.to_unified_full_viewing_key())?
-            .ok_or_else(|| format_err!("Spending key not recognized."))?;
+            .ok_or_else(|| anyhow!("Spending key not recognized."))?;
 
         let taddrs: Vec<TransparentAddress> = db_data
             .get_target_and_anchor_heights(0u32)
-            .map_err(|e| format_err!("Error while fetching anchor height: {}", e))
+            .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
             .and_then(|opt_anchor| {
                 opt_anchor
                     .map(|(_, a)| a)
-                    .ok_or_else(|| format_err!("height not available; scan required."))
+                    .ok_or_else(|| anyhow!("height not available; scan required."))
             })
             .and_then(|anchor| {
                 db_data
                     .get_transparent_balances(account, anchor)
                     .map_err(|e| {
-                        format_err!(
+                        anyhow!(
                             "Error while fetching transparent balances for {:?}: {}",
                             account,
-                            e
+                            e,
                         )
                     })
             })?
@@ -2479,7 +2469,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
                 &memo_bytes,
                 min_confirmations,
             )
-            .map_err(|e| format_err!("Error while shielding transaction: {}", e))
+            .map_err(|e| anyhow!("Error while shielding transaction: {}", e))
         } else {
             let input_selector = GreedyInputSelector::new(
                 fixed::SingleOutputChangeStrategy::new(FixedFeeRule::standard()),
@@ -2497,7 +2487,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
                 &memo_bytes,
                 min_confirmations,
             )
-            .map_err(|e| format_err!("Error while shielding transaction: {}", e))
+            .map_err(|e| anyhow!("Error while shielding transaction: {}", e))
         }
     });
     unwrap_exc_or(res, -1)
@@ -2507,10 +2497,10 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
 // Utility functions
 //
 
-fn parse_network(value: u32) -> Result<Network, failure::Error> {
+fn parse_network(value: u32) -> anyhow::Result<Network> {
     match value {
         0 => Ok(TestNetwork),
         1 => Ok(MainNetwork),
-        _ => Err(format_err!("Invalid network type: {}. Expected either 0 or 1 for Testnet or Mainnet, respectively.", value))
+        _ => Err(anyhow!("Invalid network type: {}. Expected either 0 or 1 for Testnet or Mainnet, respectively.", value))
     }
 }

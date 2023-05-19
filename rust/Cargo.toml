@@ -27,7 +27,7 @@ anyhow = "1.0"
 ffi_helpers = "0.3"
 
 [build-dependencies]
-cbindgen = "0.14"
+cbindgen = "0.24"
 
 [lib]
 name = "zcashlc"

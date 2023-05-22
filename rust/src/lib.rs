@@ -347,7 +347,7 @@ pub unsafe extern "C" fn zcashlc_free_keys(ptr: *mut FFIEncodedKeys) {
         let s: Box<FFIEncodedKeys> = unsafe { Box::from_raw(ptr) };
 
         let slice: &mut [FFIEncodedKey] = unsafe { slice::from_raw_parts_mut(s.ptr, s.len) };
-        for k in slice.into_iter() {
+        for k in slice.iter_mut() {
             unsafe { zcashlc_string_free(k.encoding) }
         }
         drop(s);
@@ -681,8 +681,8 @@ pub unsafe extern "C" fn zcashlc_list_transparent_receivers(
         match db_data.get_transparent_receivers(account) {
             Ok(receivers) => {
                 let keys = receivers
-                    .iter()
-                    .map(|(receiver, _)| {
+                    .keys()
+                    .map(|receiver| {
                         let address_str = receiver.encode(&network);
                         FFIEncodedKey {
                             account_id,
@@ -1156,7 +1156,7 @@ pub unsafe extern "C" fn zcashlc_get_balance(
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
         if account >= 0 {
-            let (_, max_height) = (&db_data)
+            let (_, max_height) = db_data
                 .block_height_extrema()
                 .map_err(|e| anyhow!("Error while fetching max block height: {}", e))
                 .and_then(|opt| {
@@ -1165,7 +1165,7 @@ pub unsafe extern "C" fn zcashlc_get_balance(
                     })
                 })?;
 
-            (&db_data)
+            db_data
                 .get_balance_at(AccountId::from(account as u32), max_height)
                 .map(|b| b.into())
                 .map_err(|e| anyhow!("Error while fetching balance: {}", e))
@@ -1199,7 +1199,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_balance(
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         if account >= 0 {
-            (&db_data)
+            db_data
                 .get_target_and_anchor_heights(min_confirmations)
                 .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
                 .and_then(|opt_anchor| {
@@ -1208,7 +1208,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_balance(
                         .ok_or_else(|| anyhow!("Anchor height not available; scan required."))
                 })
                 .and_then(|anchor| {
-                    (&db_data)
+                    db_data
                         .get_balance_at(AccountId::from(account as u32), anchor)
                         .map_err(|e| anyhow!("Error while fetching verified balance: {}", e))
                 })
@@ -1246,7 +1246,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance(
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let addr = unsafe { CStr::from_ptr(address).to_str()? };
         let taddr = TransparentAddress::decode(&network, addr).unwrap();
-        let amount = (&db_data)
+        let amount = db_data
             .get_target_and_anchor_heights(min_confirmations)
             .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
             .and_then(|opt_anchor| {
@@ -1255,7 +1255,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance(
                     .ok_or_else(|| anyhow!("height not available; scan required."))
             })
             .and_then(|anchor| {
-                (&db_data)
+                db_data
                     .get_unspent_transparent_outputs(&taddr, anchor, &[])
                     .map_err(|e| {
                         anyhow!("Error while fetching verified transparent balance: {}", e)
@@ -1300,7 +1300,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
         } else {
             return Err(anyhow!("account argument must be positive"));
         };
-        let amount = (&db_data)
+        let amount = db_data
             .get_target_and_anchor_heights(min_confirmations)
             .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
             .and_then(|opt_anchor| {
@@ -1320,10 +1320,10 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
                     })
                     .and_then(|receivers| {
                         receivers
-                            .iter()
-                            .map(|(taddr, _)| {
+                            .keys()
+                            .map(|taddr| {
                                 db_data
-                                    .get_unspent_transparent_outputs(&taddr, anchor, &[])
+                                    .get_unspent_transparent_outputs(taddr, anchor, &[])
                                     .map_err(|e| {
                                         anyhow!(
                                             "Error while fetching verified transparent balance: {}",
@@ -1369,7 +1369,7 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance(
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let addr = unsafe { CStr::from_ptr(address).to_str()? };
         let taddr = TransparentAddress::decode(&network, addr).unwrap();
-        let amount = (&db_data)
+        let amount = db_data
             .get_target_and_anchor_heights(0u32)
             .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
             .and_then(|opt_anchor| {
@@ -1378,7 +1378,7 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance(
                     .ok_or_else(|| anyhow!("height not available; scan required."))
             })
             .and_then(|anchor| {
-                (&db_data)
+                db_data
                     .get_unspent_transparent_outputs(&taddr, anchor, &[])
                     .map_err(|e| anyhow!("Error while fetching total transparent balance: {}", e))
             })?
@@ -1419,7 +1419,7 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance_for_account(
         } else {
             return Err(anyhow!("account argument must be positive"));
         };
-        let amount = (&db_data)
+        let amount = db_data
             .get_target_and_anchor_heights(0u32)
             .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
             .and_then(|opt_anchor| {
@@ -1438,8 +1438,7 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance_for_account(
                         )
                     })
             })?
-            .iter()
-            .map(|(_, value)| value)
+            .values()
             .sum::<Option<Amount>>()
             .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
@@ -1474,7 +1473,7 @@ pub unsafe extern "C" fn zcashlc_get_received_memo_as_utf8(
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
-        let memo = (&db_data)
+        let memo = db_data
             .get_memo(NoteId::ReceivedNoteId(id_note))
             .map_err(|e| anyhow!("An error occurred retrieving the memo: {}", e))
             .and_then(|memo| match memo {
@@ -1545,7 +1544,7 @@ unsafe fn zcashlc_get_memo(
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
-        let memo_bytes = (&db_data)
+        let memo_bytes = db_data
             .get_memo(note_id)
             .map_err(|e| anyhow!("An error occurred retrieving the memo: {}", e))
             .map(|memo| memo.encode())?;
@@ -1582,7 +1581,7 @@ pub unsafe extern "C" fn zcashlc_get_sent_memo_as_utf8(
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
-        let memo = (&db_data)
+        let memo = db_data
             .get_memo(NoteId::SentNoteId(id_note))
             .map_err(|e| anyhow!("An error occurred retrieving the memo: {}", e))
             .and_then(|memo| match memo {
@@ -1631,8 +1630,9 @@ pub unsafe extern "C" fn zcashlc_get_sent_memo(
 }
 
 #[no_mangle]
-// Returns a ZIP-32 signature of the given seed bytes.
-// # Safety
+/// Returns a ZIP-32 signature of the given seed bytes.
+///
+/// # Safety
 /// - `seed` must be non-null and valid for reads for `seed_len` bytes, and it must have an
 ///   alignment of `1`.
 /// - The memory referenced by `seed` must not be mutated for the duration of the function call.
@@ -1653,7 +1653,7 @@ pub unsafe extern "C" fn zcashlc_seed_fingerprint(
 
         use secrecy::ExposeSecret;
 
-        let signature = match SeedFingerprint::from_seed(&seed.expose_secret()) {
+        let signature = match SeedFingerprint::from_seed(seed.expose_secret()) {
             Some(fp) => fp,
 
             None => return Err(anyhow!("Could not create fingerprint")),
@@ -1711,7 +1711,7 @@ pub unsafe extern "C" fn zcashlc_validate_combined_chain(
         let block_db = block_db(fs_block_db_root, fs_block_db_root_len)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
-        let validate_from = (&db_data)
+        let validate_from = db_data
             .get_max_height_hash()
             .map_err(|e| anyhow!("Error while validating chain: {}", e))?;
 
@@ -1766,7 +1766,7 @@ pub unsafe extern "C" fn zcashlc_get_nearest_rewind_height(
             let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
             let height = BlockHeight::try_from(height)?;
 
-            match (&db_data).get_min_unspent_height() {
+            match db_data.get_min_unspent_height() {
                 Ok(Some(best_height)) => {
                     let first_unspent_note_height = u32::from(best_height);
                     let rewind_height = u32::from(height);
@@ -2284,7 +2284,7 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
         let req = TransactionRequest::new(vec![Payment {
             recipient_address: to,
             amount: value,
-            memo: memo,
+            memo,
             label: None,
             message: None,
             other_params: vec![],
@@ -2402,7 +2402,7 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-        let mut update_ops = (&db_data)
+        let mut update_ops = db_data
             .get_update_ops()
             .map_err(|e| anyhow!("Could not obtain a writable database connection: {}", e))?;
 

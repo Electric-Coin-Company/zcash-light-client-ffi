@@ -6,7 +6,8 @@ authors = [
     "Francisco Gindre <francisco@z.cash>",
 ]
 license = "MIT"
-edition = "2018"
+edition = "2021"
+rust-version = "1.60"
 build = "build.rs"
 
 [dependencies]

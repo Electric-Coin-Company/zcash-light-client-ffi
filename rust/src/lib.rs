@@ -12,6 +12,8 @@ use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::slice;
+use tracing::debug;
+use tracing_subscriber::prelude::*;
 use zcash_primitives::transaction::components::amount::NonNegativeAmount;
 
 use zcash_address::{
@@ -57,6 +59,9 @@ use zcash_primitives::{
     zip32::AccountId,
 };
 use zcash_proofs::prover::LocalTxProver;
+
+mod ffi;
+mod os_log;
 
 fn unwrap_exc_or<T>(exc: Result<T, ()>, def: T) -> T {
     match exc {
@@ -113,6 +118,41 @@ fn block_db(fsblock_db: *const u8, fsblock_db_len: usize) -> anyhow::Result<FsBl
     }));
     FsBlockDb::for_path(cache_db)
         .map_err(|e| anyhow!("Error opening block source database connection: {}", e))
+}
+
+/// Initializes global Rust state, such as the logging infrastructure and threadpools.
+///
+/// # Panics
+///
+/// This method panics if called more than once.
+#[no_mangle]
+pub extern "C" fn zcashlc_init_on_load() {
+    // Set up the tracing layers for the Apple OS logging framework.
+    let (log_layer, signpost_layer) = os_log::layers("co.electriccoin.ios", "rust");
+
+    // Install the `tracing` subscriber.
+    tracing_subscriber::registry()
+        .with(log_layer)
+        .with(signpost_layer)
+        .init();
+
+    // Log panics instead of writing them to stderr.
+    log_panics::init();
+
+    // Manually build the Rayon thread pool, so we can name the threads.
+    rayon::ThreadPoolBuilder::new()
+        .thread_name(|i| format!("zc-rayon-{}", i))
+        .build_global()
+        .expect("Only initialized once");
+
+    debug!("Rust backend has been initialized successfully");
+    cfg_if::cfg_if! {
+        if #[cfg(debug_assertions)] {
+            debug!("WARNING! Debugging enabled! This will likely slow things down 10X!");
+        } else {
+            debug!("Release enabled (congrats, this is NOT a debug build).");
+        }
+    }
 }
 
 /// Returns the length of the last error message to be logged.

@@ -52,6 +52,89 @@ typedef struct FFIEncodedKeys {
   uintptr_t len;
 } FFIEncodedKeys;
 
+/**
+ * A struct that contains a subtree root.
+ *
+ * # Safety
+ *
+ * - `root_hash_ptr` must be non-null and must be valid for reads for `root_hash_ptr_len`
+ *   bytes, and it must have an alignment of `1`.
+ * - The total size `root_hash_ptr_len` of the slice pointed to by `root_hash_ptr` must
+ *   be no larger than `isize::MAX`. See the safety documentation of `pointer::offset`.
+ */
+typedef struct FfiSubtreeRoot {
+  uint8_t *root_hash_ptr;
+  uintptr_t root_hash_ptr_len;
+  uint32_t completing_block_height;
+} FfiSubtreeRoot;
+
+/**
+ * A struct that contains a pointer to, and length information for, a heap-allocated
+ * slice of [`FfiSubtreeRoot`] values.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiSubtreeRoot>()`
+ *   many bytes, and it must be properly aligned. This means in particular:
+ *   - The entire memory range pointed to by `ptr` must be contained within a single
+ *     allocated object. Slices can never span across multiple allocated objects.
+ *   - `ptr` must be non-null and aligned even for zero-length slices.
+ *   - `ptr` must point to `len` consecutive properly initialized values of type
+ *     [`FfiSubtreeRoot`].
+ * - The total size `len * mem::size_of::<FfiSubtreeRoot>()` of the slice pointed to
+ *   by `ptr` must be no larger than isize::MAX. See the safety documentation of
+ *   `pointer::offset`.
+ * - See the safety documentation of [`FfiSubtreeRoot`]
+ */
+typedef struct FfiSubtreeRoots {
+  struct FfiSubtreeRoot *ptr;
+  uintptr_t len;
+} FfiSubtreeRoots;
+
+/**
+ * A struct that contains details about scan progress.
+ *
+ * When `denominator` is zero, the numerator encodes a non-progress indicator:
+ * - 0: progress is unknown.
+ * - 1: an error occurred.
+ */
+typedef struct FfiScanProgress {
+  uint64_t numerator;
+  uint64_t denominator;
+} FfiScanProgress;
+
+/**
+ * A struct that contains the start (inclusive) and end (exclusive) of a range of blocks
+ * to scan.
+ */
+typedef struct FfiScanRange {
+  int32_t start;
+  int32_t end;
+  uint8_t priority;
+} FfiScanRange;
+
+/**
+ * A struct that contains a pointer to, and length information for, a heap-allocated
+ * slice of [`FfiScanRange`] values.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiScanRange>()`
+ *   many bytes, and it must be properly aligned. This means in particular:
+ *   - The entire memory range pointed to by `ptr` must be contained within a single
+ *     allocated object. Slices can never span across multiple allocated objects.
+ *   - `ptr` must be non-null and aligned even for zero-length slices.
+ *   - `ptr` must point to `len` consecutive properly initialized values of type
+ *     [`FfiScanRange`].
+ * - The total size `len * mem::size_of::<FfiScanRange>()` of the slice pointed to
+ *   by `ptr` must be no larger than isize::MAX. See the safety documentation of
+ *   `pointer::offset`.
+ */
+typedef struct FfiScanRanges {
+  struct FfiScanRange *ptr;
+  uintptr_t len;
+} FfiScanRanges;
+
 typedef struct FFIBlockMeta {
   uint32_t height;
   uint8_t *block_hash_ptr;
@@ -69,11 +152,13 @@ typedef struct FFIBlocksMeta {
 /**
  * Initializes global Rust state, such as the logging infrastructure and threadpools.
  *
+ * When `show_trace_logs` is `true`, Rust events at the `TRACE` level will be logged.
+ *
  * # Panics
  *
  * This method panics if called more than once.
  */
-void zcashlc_init_on_load(void);
+void zcashlc_init_on_load(bool show_trace_logs);
 
 /**
  * Returns the length of the last error message to be logged.
@@ -174,6 +259,9 @@ struct FFIBinaryKey *zcashlc_create_account(const uint8_t *db_data,
                                             uintptr_t db_data_len,
                                             const uint8_t *seed,
                                             uintptr_t seed_len,
+                                            const uint8_t *treestate,
+                                            uintptr_t treestate_len,
+                                            int64_t recover_until,
                                             uint32_t network_id);
 
 /**
@@ -185,31 +273,6 @@ struct FFIBinaryKey *zcashlc_create_account(const uint8_t *db_data,
  *   See the safety documentation of [`FFIEncodedKeys`].
  */
 void zcashlc_free_keys(struct FFIEncodedKeys *ptr);
-
-/**
- * Initialises the data database with the given set of unified full viewing keys. This
- * should only be used in special cases for implementing wallet recovery; prefer
- * `zcashlc_create_account` for normal account creation purposes.
- *
- * # Safety
- *
- * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
- *   alignment of `1`. Its contents must be a string representing a valid system path in the
- *   operating system's preferred representation.
- * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
- * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
- *   documentation of pointer::offset.
- * - `ufvks` must be non-null and valid for reads for `ufvks_len * sizeof(FFIEncodedKey)` bytes.
- *   It must point to an array of `FFIEncodedKey` values.
- * - The memory referenced by `ufvks` must not be mutated for the duration of the function call.
- * - The total size `ufvks_len` must be no larger than `isize::MAX`. See the safety
- *   documentation of pointer::offset.
- */
-bool zcashlc_init_accounts_table_with_keys(const uint8_t *db_data,
-                                           uintptr_t db_data_len,
-                                           struct FFIEncodedKey *ufvks_ptr,
-                                           uintptr_t ufvks_len,
-                                           uint32_t network_id);
 
 /**
  * Derives and returns a unified spending key from the given seed for the given account ID.
@@ -250,37 +313,6 @@ struct FFIBinaryKey *zcashlc_derive_spending_key(const uint8_t *seed,
 char *zcashlc_spending_key_to_full_viewing_key(const uint8_t *usk_ptr,
                                                uintptr_t usk_len,
                                                uint32_t network_id);
-
-/**
- * Initialises the data database with the given block metadata.
- *
- * This enables a newly-created database to be immediately-usable, without needing to
- * synchronise historic blocks.
- *
- * The string represented by `sapling_tree_hex` should contain the encoded byte representation
- * of a Sapling commitment tree.
- *
- * # Safety
- *
- * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
- *   alignment of `1`. Its contents must be a string representing a valid system path in the
- *   operating system's preferred representation.
- * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
- * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
- *   documentation of pointer::offset.
- * - `hash_hex` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `hash_hex` must not be mutated for the duration of the function call.
- * - `sapling_tree_hex` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `sapling_tree_hex` must not be mutated for the duration of the
- *   function call.
- */
-int32_t zcashlc_init_blocks_table(const uint8_t *db_data,
-                                  uintptr_t db_data_len,
-                                  int32_t height,
-                                  const char *hash_hex,
-                                  uint32_t time,
-                                  const char *sapling_tree_hex,
-                                  uint32_t network_id);
 
 /**
  * Returns the most-recently-generated unified payment address for the specified account.
@@ -597,10 +629,8 @@ int64_t zcashlc_get_total_transparent_balance_for_account(const uint8_t *db_data
                                                           int32_t account);
 
 /**
- * Returns the memo for a received note, if it is known and a valid UTF-8 string.
- *
- * The note is identified by its row index in the `received_notes` table within the data
- * database.
+ * Returns the memo for a note by copying the corresponding bytes to the received
+ * pointer in `memo_bytes_ret`.
  *
  * # Safety
  *
@@ -610,81 +640,38 @@ int64_t zcashlc_get_total_transparent_balance_for_account(const uint8_t *db_data
  * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `txid_bytes` must be non-null and valid for reads for 32 bytes, and it must have an alignment
+ *   of `1`.
+ * - `memo_bytes_ret` must be non-null and must point to an allocated 512-byte region of memory.
+ */
+bool zcashlc_get_memo(const uint8_t *db_data,
+                      uintptr_t db_data_len,
+                      const uint8_t *txid_bytes,
+                      uint16_t output_index,
+                      uint8_t *memo_bytes_ret,
+                      uint32_t network_id);
+
+/**
+ * Returns the memo for a note, if it is known and a valid UTF-8 string.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `txid_bytes` must be non-null and valid for reads for 32 bytes, and it must have an alignment
+ *   of `1`.
  * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
  *   when done using it.
  */
-char *zcashlc_get_received_memo_as_utf8(const uint8_t *db_data,
-                                        uintptr_t db_data_len,
-                                        int64_t id_note,
-                                        uint32_t network_id);
-
-/**
- * Returns the memo for a received note by copying the corresponding bytes to the received
- * pointer in `memo_bytes_ret`.
- *
- * The note is identified by its row index in the `received_notes` table within the data
- * database.
- *
- * # Safety
- *
- * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
- *   alignment of `1`. Its contents must be a string representing a valid system path in the
- *   operating system's preferred representation.
- * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
- * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
- *   documentation of pointer::offset.
- * - `memo_bytes_ret` must be non-null and must point to an allocated 512-byte region of memory.
- */
-bool zcashlc_get_received_memo(const uint8_t *db_data,
+char *zcashlc_get_memo_as_utf8(const uint8_t *db_data,
                                uintptr_t db_data_len,
-                               int64_t id_note,
-                               uint8_t *memo_bytes_ret,
+                               const uint8_t *txid_bytes,
+                               uint16_t output_index,
                                uint32_t network_id);
-
-/**
- * Returns the memo for a sent note, if it is known and a valid UTF-8 string.
- *
- * The note is identified by its row index in the `sent_notes` table within the data
- * database.
- *
- * # Safety
- *
- * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
- *   alignment of `1`. Its contents must be a string representing a valid system path in the
- *   operating system's preferred representation.
- * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
- * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
- *   documentation of pointer::offset.
- * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
- *   when done using it.
- */
-char *zcashlc_get_sent_memo_as_utf8(const uint8_t *db_data,
-                                    uintptr_t db_data_len,
-                                    int64_t id_note,
-                                    uint32_t network_id);
-
-/**
- * Returns the memo for a sent note, by copying the corresponding bytes to the received
- * pointer in `memo_bytes_ret`.
- *
- * The note is identified by its row index in the `sent_notes` table within the data
- * database.
- *
- * # Safety
- *
- * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
- *   alignment of `1`. Its contents must be a string representing a valid system path in the
- *   operating system's preferred representation.
- * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
- * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
- *   documentation of pointer::offset.
- * - `memo_bytes_ret` must be non-null and must point to an allocated 512-byte region of memory.
- */
-bool zcashlc_get_sent_memo(const uint8_t *db_data,
-                           uintptr_t db_data_len,
-                           int64_t id_note,
-                           uint8_t *memo_bytes_ret,
-                           uint32_t network_id);
 
 /**
  * Returns a ZIP-32 signature of the given seed bytes.
@@ -699,46 +686,6 @@ bool zcashlc_get_sent_memo(const uint8_t *db_data,
 bool zcashlc_seed_fingerprint(const uint8_t *seed,
                               uintptr_t seed_len,
                               uint8_t *signature_bytes_ret);
-
-/**
- * Checks that the scanned blocks in the data database, when combined with the recent
- * `CompactBlock`s in the block cache, form a valid chain.
- *
- * This function is built on the core assumption that the information provided in the
- * block cache is more likely to be accurate than the previously-scanned information.
- * This follows from the design (and trust) assumption that the `lightwalletd` server
- * provides accurate block information as of the time it was requested.
- *
- * Returns:
- * - `-1` if the combined chain is valid.
- * - `upper_bound` if the combined chain is invalid.
- *   `upper_bound` is the height of the highest invalid block (on the assumption that the
- *   highest block in the block cache is correct).
- * - `0` if there was an error during validation unrelated to chain validity.
- *
- * This function does not mutate either of the databases.
- *
- * # Safety
- *
- * - `fs_block_db_root` must be non-null and valid for reads for `fs_block_db_root_len` bytes, and it must have an
- *   alignment of `1`. Its contents must be a string representing a valid system path in the
- *   operating system's preferred representation.
- * - The memory referenced by `fs_block_db_root` must not be mutated for the duration of the function call.
- * - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
- *   documentation of pointer::offset.
- * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
- *   alignment of `1`. Its contents must be a string representing a valid system path in the
- *   operating system's preferred representation.
- * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
- * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
- *   documentation of pointer::offset.
- */
-int32_t zcashlc_validate_combined_chain(const uint8_t *fs_block_db_root,
-                                        uintptr_t fs_block_db_root_len,
-                                        const uint8_t *db_data,
-                                        uintptr_t db_data_len,
-                                        uint32_t validate_limit,
-                                        uint32_t network_id);
 
 /**
  * Returns the most recent block height to which it is possible to reset the state
@@ -779,13 +726,155 @@ bool zcashlc_rewind_to_height(const uint8_t *db_data,
                               uint32_t network_id);
 
 /**
- * Scans new blocks added to the cache for any transactions received by the tracked
- * accounts.
+ * Adds a sequence of Sapling subtree roots to the data store.
  *
- * This function pays attention only to cached blocks with heights greater than the
- * highest scanned block in `db_data`. Cached blocks with lower heights are not verified
- * against previously-scanned blocks. In particular, this function **assumes** that the
- * caller is handling rollbacks.
+ * Returns true if the subtrees could be stored, false otherwise. When false is returned,
+ * caller should check for errors.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `roots` must be non-null and initialized.
+ * - The memory referenced by `roots` must not be mutated for the duration of the function call.
+ */
+bool zcashlc_put_sapling_subtree_roots(const uint8_t *db_data,
+                                       uintptr_t db_data_len,
+                                       uint64_t start_index,
+                                       const struct FfiSubtreeRoots *roots,
+                                       uint32_t network_id);
+
+/**
+ * Updates the wallet's view of the blockchain.
+ *
+ * This method is used to provide the wallet with information about the state of the blockchain,
+ * and detect any previously scanned data that needs to be re-validated before proceeding with
+ * scanning. It should be called at wallet startup prior to calling `zcashlc_suggest_scan_ranges`
+ * in order to provide the wallet with the information it needs to correctly prioritize scanning
+ * operations.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ */
+bool zcashlc_update_chain_tip(const uint8_t *db_data,
+                              uintptr_t db_data_len,
+                              int32_t height,
+                              uint32_t network_id);
+
+/**
+ * Returns the height to which the wallet has been fully scanned.
+ *
+ * This is the height for which the wallet has fully trial-decrypted this and all
+ * preceding blocks above the wallet's birthday height.
+ *
+ * Returns a non-negative block height, -1 if empty, or -2 if an error occurred.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ */
+int64_t zcashlc_fully_scanned_height(const uint8_t *db_data,
+                                     uintptr_t db_data_len,
+                                     uint32_t network_id);
+
+/**
+ * Returns the maximum height that the wallet has scanned.
+ *
+ * If the wallet is fully synced, this will be equivalent to `zcashlc_block_fully_scanned`;
+ * otherwise the maximal scanned height is likely to be greater than the fully scanned
+ * height due to the fact that out-of-order scanning can leave gaps.
+ *
+ * Returns a non-negative block height, -1 if empty, or -2 if an error occurred.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ */
+int64_t zcashlc_max_scanned_height(const uint8_t *db_data,
+                                   uintptr_t db_data_len,
+                                   uint32_t network_id);
+
+/**
+ * Returns the scan progress derived from the current wallet state.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must
+ *   have an alignment of `1`. Its contents must be a string representing a valid system
+ *   path in the operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ */
+struct FfiScanProgress zcashlc_get_scan_progress(const uint8_t *db_data,
+                                                 uintptr_t db_data_len,
+                                                 uint32_t network_id);
+
+/**
+ * Frees an array of FfiScanRanges values as allocated by `zcashlc_derive_unified_viewing_keys_from_seed`
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`FfiScanRanges`].
+ *   See the safety documentation of [`FfiScanRanges`].
+ */
+void zcashlc_free_scan_ranges(struct FfiScanRanges *ptr);
+
+/**
+ * Returns a list of suggested scan ranges based upon the current wallet state.
+ *
+ * This method should only be used in cases where the `CompactBlock` data that will be
+ * made available to `zcashlc_scan_blocks` for the requested block ranges includes note
+ * commitment tree size information for each block; or else the scan is likely to fail if
+ * notes belonging to the wallet are detected.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must
+ *   have an alignment of `1`. Its contents must be a string representing a valid system
+ *   path in the operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - Call [`zcashlc_free_scan_ranges`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiScanRanges *zcashlc_suggest_scan_ranges(const uint8_t *db_data,
+                                                  uintptr_t db_data_len,
+                                                  uint32_t network_id);
+
+/**
+ * Scans new blocks added to the cache for any transactions received by the tracked
+ * accounts, while checking that they form a valid chan.
+ *
+ * This function is built on the core assumption that the information provided in the
+ * block cache is more likely to be accurate than the previously-scanned information.
+ * This follows from the design (and trust) assumption that the `lightwalletd` server
+ * provides accurate block information as of the time it was requested.
+ *
+ * This function **assumes** that the caller is handling rollbacks.
  *
  * For brand-new light client databases, this function starts scanning from the Sapling
  * activation height. This height can be fast-forwarded to a more recent block by calling
@@ -813,6 +902,7 @@ int32_t zcashlc_scan_blocks(const uint8_t *fs_block_cache_root,
                             uintptr_t fs_block_cache_root_len,
                             const uint8_t *db_data,
                             uintptr_t db_data_len,
+                            int32_t from_height,
                             uint32_t scan_limit,
                             uint32_t network_id);
 
@@ -911,7 +1001,7 @@ bool zcashlc_rewind_fs_block_cache_to_height(const uint8_t *fs_block_db_root,
 /**
  * Get the latest cached block height in the filesystem block cache
  *
- * Returns a positive blockheight or -1 if empty or an error occurred.
+ * Returns a non-negative block height, -1 if empty, or -2 if an error occurred.
  *
  * # Safety
  *
@@ -991,21 +1081,23 @@ int32_t zcashlc_decrypt_and_store_transaction(const uint8_t *db_data,
  * - The memory referenced by `output_params` must not be mutated for the duration of the function call.
  * - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `txid_bytes_ret` must be non-null and must point to an allocated 32-byte region of memory.
  */
-int64_t zcashlc_create_to_address(const uint8_t *db_data,
-                                  uintptr_t db_data_len,
-                                  const uint8_t *usk_ptr,
-                                  uintptr_t usk_len,
-                                  const char *to,
-                                  int64_t value,
-                                  const uint8_t *memo,
-                                  const uint8_t *spend_params,
-                                  uintptr_t spend_params_len,
-                                  const uint8_t *output_params,
-                                  uintptr_t output_params_len,
-                                  uint32_t network_id,
-                                  uint32_t min_confirmations,
-                                  bool use_zip317_fees);
+bool zcashlc_create_to_address(const uint8_t *db_data,
+                               uintptr_t db_data_len,
+                               const uint8_t *usk_ptr,
+                               uintptr_t usk_len,
+                               const char *to,
+                               int64_t value,
+                               const uint8_t *memo,
+                               const uint8_t *spend_params,
+                               uintptr_t spend_params_len,
+                               const uint8_t *output_params,
+                               uintptr_t output_params_len,
+                               uint32_t network_id,
+                               uint32_t min_confirmations,
+                               bool use_zip317_fees,
+                               uint8_t *txid_bytes_ret);
 
 int32_t zcashlc_branch_id_for_height(int32_t height, uint32_t network_id);
 
@@ -1047,17 +1139,19 @@ void zcashlc_string_free(char *s);
  * - The memory referenced by `output_params` must not be mutated for the duration of the function call.
  * - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `txid_bytes_ret` must be non-null and must point to an allocated 32-byte region of memory.
  */
-int64_t zcashlc_shield_funds(const uint8_t *db_data,
-                             uintptr_t db_data_len,
-                             const uint8_t *usk_ptr,
-                             uintptr_t usk_len,
-                             const uint8_t *memo,
-                             uint64_t shielding_threshold,
-                             const uint8_t *spend_params,
-                             uintptr_t spend_params_len,
-                             const uint8_t *output_params,
-                             uintptr_t output_params_len,
-                             uint32_t network_id,
-                             uint32_t min_confirmations,
-                             bool use_zip317_fees);
+bool zcashlc_shield_funds(const uint8_t *db_data,
+                          uintptr_t db_data_len,
+                          const uint8_t *usk_ptr,
+                          uintptr_t usk_len,
+                          const uint8_t *memo,
+                          uint64_t shielding_threshold,
+                          const uint8_t *spend_params,
+                          uintptr_t spend_params_len,
+                          const uint8_t *output_params,
+                          uintptr_t output_params_len,
+                          uint32_t network_id,
+                          uint32_t min_confirmations,
+                          bool use_zip317_fees,
+                          uint8_t *txid_bytes_ret);

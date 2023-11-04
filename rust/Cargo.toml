@@ -56,3 +56,10 @@ lto = true
 [features]
 mainnet = ["zcash_client_sqlite/mainnet"]
 testnet = []
+
+[patch.crates-io]
+zcash_address = { git = "https://github.com/nuttycom/librustzcash.git", rev = "8be0d8487495dd8dd4c1a54177b7418547f30060" }
+zcash_client_backend = { git = "https://github.com/nuttycom/librustzcash.git", rev = "8be0d8487495dd8dd4c1a54177b7418547f30060" }
+zcash_client_sqlite = { git = "https://github.com/nuttycom/librustzcash.git", rev = "8be0d8487495dd8dd4c1a54177b7418547f30060" }
+zcash_primitives = { git = "https://github.com/nuttycom/librustzcash.git", rev = "8be0d8487495dd8dd4c1a54177b7418547f30060" }
+zcash_proofs = { git = "https://github.com/nuttycom/librustzcash.git", rev = "8be0d8487495dd8dd4c1a54177b7418547f30060" }

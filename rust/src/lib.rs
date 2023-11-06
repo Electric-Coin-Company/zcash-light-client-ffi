@@ -2496,6 +2496,43 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
     unwrap_exc_or(res, false)
 }
 
+/// A struct that contains a pointer to the raw bytes of a protobuf
+///
+/// # Safety
+///
+/// - `protobuf` must be non-null and must point to an array of `protobuf_len` bytes.
+#[repr(C)]
+pub struct FFIRawProtobuf {
+    protobuf: *mut u8,
+    protobuf_len: usize,
+}
+
+impl FFIRawProtobuf {
+    fn new(protobuf_bytes: Vec<u8>) -> Self {
+        let mut raw_protobuf_bytes = ManuallyDrop::new(protobuf_bytes.into_boxed_slice());
+        FFIRawProtobuf {
+            protobuf: raw_protobuf_bytes.as_mut_ptr(),
+            protobuf_len: raw_protobuf_bytes.len(),
+        }
+    }
+}
+
+/// Frees a FFIRawProtobuf value
+///
+/// # Safety
+///
+/// - `ptr` must be non-null and must point to a struct having the layout of [`FFIRawProtobuf`].
+///   See the safety documentation of [`FFIRawProtobuf`].
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_free_raw_protobuf(ptr: *mut FFIRawProtobuf) {
+    if !ptr.is_null() {
+        let raw_protobuf: Box<FFIRawProtobuf> = unsafe { Box::from_raw(ptr) };
+        let raw_protobuf_slice: &mut [u8] =
+            unsafe { slice::from_raw_parts_mut(raw_protobuf.protobuf, raw_protobuf.protobuf_len) };
+        drop(unsafe { Box::from_raw(raw_protobuf_slice) });
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_propose_transfer(
     db_data: *const u8,
@@ -2511,9 +2548,8 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
     output_params_len: usize,
     network_id: u32,
     min_confirmations: u32,
-    use_zip317_fees: bool,
-    proposal_proto_bytes_ret: *mut u8
-) -> bool {
+    use_zip317_fees: bool
+) -> *mut FFIRawProtobuf {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let min_confirmations = NonZeroU32::new(min_confirmations)
@@ -2583,7 +2619,7 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
             DustOutputPolicy::default(),
         );
 
-        let proposal = propose_transfer(
+        propose_transfer(
             &mut db_data, 
             &network,
             account,
@@ -2591,16 +2627,20 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
             req, 
             min_confirmations
         )
-        .map_err(|e| anyhow!("Error while creating transaction proposal: {}", e))?;
-
-        let proposal_proto = proposal::Proposal::from_standard_proposal(&network, &proposal);
-        let proposal_bytes = unsafe { slice::from_raw_parts_mut(proposal_proto_bytes_ret, 32) };
-        proposal_proto.write(proposal_bytes)?;
-
-        Ok(true)
+        .map(|proposal| {
+            if let Some(proto) = proposal::Proposal::from_standard_proposal(&network, &proposal) {
+                let mut buf = Vec::new();
+                buf.reserve(proto.encoded_len());
+                proto.encode(&mut buf).unwrap();
+                Ok(Box::into_raw(Box::new(FFIRawProtobuf::new(buf))))
+            } else {
+                Err(anyhow!("Error while serializing transfer proposal"))
+            }
+        })
+        .map_err(|_| anyhow!("Error while proposing transfer"))?
     });
 
-    unwrap_exc_or(res, false)
+    unwrap_exc_or_null(res)
 }
 
 #[no_mangle]

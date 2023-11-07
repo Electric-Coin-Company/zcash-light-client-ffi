@@ -5,10 +5,7 @@ use ffi_helpers::panic::catch_panic;
 use prost::Message;
 use schemer::MigratorError;
 use secrecy::Secret;
-use zcash_client_backend::data_api::wallet::input_selection::Proposal;
-use zcash_client_backend::data_api::wallet::propose_transfer;
-use zcash_client_backend::proto::proposal;
-use std::convert::{TryFrom, TryInto};
+use std::convert::{Infallible, TryFrom, TryInto};
 use std::ffi::{CStr, CString, OsStr};
 use std::mem::ManuallyDrop;
 use std::num::NonZeroU32;
@@ -18,14 +15,6 @@ use std::path::Path;
 use std::slice;
 use tracing::{debug, metadata::LevelFilter};
 use tracing_subscriber::prelude::*;
-use zcash_client_backend::data_api::{
-    chain::CommitmentTreeRoot, NoteId, ShieldedProtocol, WalletCommitmentTrees,
-};
-use zcash_client_backend::fees::standard;
-use zcash_primitives::merkle_tree::HashSer;
-use zcash_primitives::sapling;
-use zcash_primitives::transaction::fees::StandardFeeRule;
-use zcash_primitives::transaction::{components::amount::NonNegativeAmount, TxId};
 
 use zcash_address::{
     self,
@@ -36,16 +25,21 @@ use zcash_client_backend::{
     address::{RecipientAddress, UnifiedAddress},
     data_api::{
         chain::scan_cached_blocks,
+        chain::CommitmentTreeRoot,
+        error::Error,
         scanning::ScanPriority,
         wallet::{
             decrypt_and_store_transaction, input_selection::GreedyInputSelector,
-            shield_transparent_funds, spend,
+            input_selection::GreedyInputSelectorError, propose_transfer, shield_transparent_funds,
+            spend,
         },
-        AccountBirthday, WalletRead, WalletWrite,
+        AccountBirthday, NoteId, ShieldedProtocol, WalletCommitmentTrees, WalletRead, WalletWrite,
     },
     encoding::{decode_extended_full_viewing_key, decode_extended_spending_key, AddressCodec},
+    fees::standard,
     fees::DustOutputPolicy,
     keys::{DecodingError, Era, UnifiedFullViewingKey, UnifiedSpendingKey},
+    proto::proposal,
     proto::service::TreeState,
     wallet::{OvkPolicy, WalletTransparentOutput},
     zip321::{Payment, TransactionRequest},
@@ -53,8 +47,9 @@ use zcash_client_backend::{
 
 use zcash_client_sqlite::{
     chain::{init::init_blockmeta_db, BlockMeta},
+    error::SqliteClientError,
     wallet::init::{init_wallet_db, WalletMigrationError},
-    FsBlockDb, WalletDb,
+    FsBlockDb, ReceivedNoteId, WalletDb,
 };
 use zcash_primitives::consensus::Network::{MainNetwork, TestNetwork};
 use zcash_primitives::{
@@ -62,9 +57,12 @@ use zcash_primitives::{
     consensus::{BlockHeight, BranchId, Network, Parameters},
     legacy::{self, TransparentAddress},
     memo::{Memo, MemoBytes},
+    merkle_tree::HashSer,
+    sapling,
     transaction::{
-        components::{Amount, OutPoint, TxOut},
-        Transaction,
+        components::{amount::NonNegativeAmount, Amount, OutPoint, TxOut},
+        fees::{zip317::FeeError, StandardFeeRule},
+        Transaction, TxId,
     },
     zip32::fingerprint::SeedFingerprint,
     zip32::AccountId,
@@ -2542,13 +2540,9 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
     to: *const c_char,
     value: i64,
     memo: *const u8,
-    spend_params: *const u8,
-    spend_params_len: usize,
-    output_params: *const u8,
-    output_params_len: usize,
     network_id: u32,
     min_confirmations: u32,
-    use_zip317_fees: bool
+    use_zip317_fees: bool,
 ) -> *mut FFIRawProtobuf {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
@@ -2560,12 +2554,6 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
         let to = unsafe { CStr::from_ptr(to) }.to_str()?;
         let value = NonNegativeAmount::from_nonnegative_i64(value)
             .map_err(|()| anyhow!("Invalid amount, out of range"))?;
-        let spend_params = Path::new(OsStr::from_bytes(unsafe {
-            slice::from_raw_parts(spend_params, spend_params_len)
-        }));
-        let output_params = Path::new(OsStr::from_bytes(unsafe {
-            slice::from_raw_parts(output_params, output_params_len)
-        }));
 
         let to = RecipientAddress::decode(&network, to)
             .ok_or_else(|| anyhow!("PaymentAddress is for the wrong network"))?;
@@ -2594,8 +2582,6 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
                 }
             }
         }?;
-    
-        let prover = LocalTxProver::new(spend_params, output_params);
 
         let req = TransactionRequest::new(vec![Payment {
             recipient_address: to,
@@ -2613,19 +2599,19 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
             #[allow(deprecated)]
             StandardFeeRule::PreZip313
         };
-    
+
         let input_selector = GreedyInputSelector::new(
-            standard::SingleOutputChangeStrategy::new(fee_rule, memo),
+            standard::SingleOutputChangeStrategy::new(fee_rule, None),
             DustOutputPolicy::default(),
         );
 
         propose_transfer(
-            &mut db_data, 
+            &mut db_data,
             &network,
             account,
-            &input_selector, 
-            req, 
-            min_confirmations
+            &input_selector,
+            req,
+            min_confirmations,
         )
         .map(|proposal| {
             if let Some(proto) = proposal::Proposal::from_standard_proposal(&network, &proposal) {
@@ -2637,7 +2623,14 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
                 Err(anyhow!("Error while serializing transfer proposal"))
             }
         })
-        .map_err(|_| anyhow!("Error while proposing transfer"))?
+        .map_err(
+            |e: Error<
+                SqliteClientError,
+                Infallible,
+                GreedyInputSelectorError<FeeError, ReceivedNoteId>,
+                FeeError,
+            >| anyhow!("Error while proposing transfer: {}", e),
+        )?
     });
 
     unwrap_exc_or_null(res)

@@ -15,6 +15,7 @@ use std::path::Path;
 use std::slice;
 use tracing::{debug, metadata::LevelFilter};
 use tracing_subscriber::prelude::*;
+use zcash_client_backend::data_api::wallet::create_proposed_transaction;
 
 use zcash_address::{
     self,
@@ -30,8 +31,8 @@ use zcash_client_backend::{
         scanning::ScanPriority,
         wallet::{
             decrypt_and_store_transaction, input_selection::GreedyInputSelector,
-            input_selection::GreedyInputSelectorError, propose_transfer, shield_transparent_funds,
-            spend,
+            input_selection::GreedyInputSelectorError, propose_shielding, propose_transfer,
+            shield_transparent_funds, spend,
         },
         AccountBirthday, NoteId, ShieldedProtocol, WalletCommitmentTrees, WalletRead, WalletWrite,
     },
@@ -48,7 +49,10 @@ use zcash_client_backend::{
 use zcash_client_sqlite::{
     chain::{init::init_blockmeta_db, BlockMeta},
     error::SqliteClientError,
-    wallet::init::{init_wallet_db, WalletMigrationError},
+    wallet::{
+        init::{init_wallet_db, WalletMigrationError},
+        commitment_tree::{self},
+    },
     FsBlockDb, ReceivedNoteId, WalletDb,
 };
 use zcash_primitives::consensus::Network::{MainNetwork, TestNetwork};
@@ -2532,14 +2536,74 @@ pub unsafe extern "C" fn zcashlc_free_raw_protobuf(ptr: *mut FFIRawProtobuf) {
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn zcashlc_create_proposed_transfer(
+    db_data: *const u8,
+    db_data_len: usize,
+    usk_ptr: *const u8,
+    usk_len: usize,
+    proposal: *const FFIRawProtobuf,
+    spend_params: *const u8,
+    spend_params_len: usize,
+    output_params: *const u8,
+    output_params_len: usize,
+    network_id: u32,
+    txid_bytes_ret: *mut u8,
+) -> bool {
+    let res = catch_panic(|| {
+        let network = parse_network(network_id)?;
+        let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
+        let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
+        let proposal = unsafe { proposal.read() };
+        let proposal_bytes =
+            unsafe { slice::from_raw_parts(proposal.protobuf, proposal.protobuf_len) };
+        let proposal = proposal::Proposal::decode(proposal_bytes)
+            .map_err(|e| anyhow!("Error deserializing proposal protobuf: {:?}", e))
+            .and_then(|p| {
+                p.try_into_standard_proposal(&network, &db_data)
+                    .map_err(|e| anyhow!("Error deserializing proposal protobuf: {:?}", e))
+            })?;
+        let spend_params = Path::new(OsStr::from_bytes(unsafe {
+            slice::from_raw_parts(spend_params, spend_params_len)
+        }));
+        let output_params = Path::new(OsStr::from_bytes(unsafe {
+            slice::from_raw_parts(output_params, output_params_len)
+        }));
+
+        let prover = LocalTxProver::new(spend_params, output_params);
+
+        let txid = create_proposed_transaction(
+            &mut db_data,
+            &network,
+            prover,
+            &usk,
+            OvkPolicy::Sender,
+            &proposal,
+        )
+        .map_err(
+            |e: Error<
+                SqliteClientError,
+                commitment_tree::Error,
+                GreedyInputSelectorError<FeeError, ReceivedNoteId>,
+                FeeError,
+            >| anyhow!("Error while sending funds: {}", e),
+        )?;
+
+        let txid_bytes = unsafe { slice::from_raw_parts_mut(txid_bytes_ret, 32) };
+        txid.write(txid_bytes)?;
+
+        Ok(true)
+    });
+
+    unwrap_exc_or(res, false)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn zcashlc_propose_transfer(
     db_data: *const u8,
     db_data_len: usize,
     usk_ptr: *const u8,
     usk_len: usize,
-    to: *const c_char,
-    value: i64,
-    memo: *const u8,
+    zip321_uri: *const c_char,
     network_id: u32,
     min_confirmations: u32,
     use_zip317_fees: bool,
@@ -2549,49 +2613,13 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
         let min_confirmations = NonZeroU32::new(min_confirmations)
             .ok_or(anyhow!("min_confirmations should be non-zero"))?;
         let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-
         let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
-        let to = unsafe { CStr::from_ptr(to) }.to_str()?;
-        let value = NonNegativeAmount::from_nonnegative_i64(value)
-            .map_err(|()| anyhow!("Invalid amount, out of range"))?;
-
-        let to = RecipientAddress::decode(&network, to)
-            .ok_or_else(|| anyhow!("PaymentAddress is for the wrong network"))?;
-
         let account = db_data
             .get_account_for_ufvk(&usk.to_unified_full_viewing_key())?
             .ok_or_else(|| anyhow!("Spending key not recognized."))?;
-
-        let memo = match to {
-            RecipientAddress::Shielded(_) | RecipientAddress::Unified(_) => {
-                if memo.is_null() {
-                    Ok(None)
-                } else {
-                    MemoBytes::from_bytes(unsafe { slice::from_raw_parts(memo, 512) })
-                        .map(Some)
-                        .map_err(|e| anyhow!("Invalid MemoBytes: {}", e))
-                }
-            }
-            RecipientAddress::Transparent(_) => {
-                if memo.is_null() {
-                    Ok(None)
-                } else {
-                    Err(anyhow!(
-                        "Memos are not permitted when sending to transparent recipients."
-                    ))
-                }
-            }
-        }?;
-
-        let req = TransactionRequest::new(vec![Payment {
-            recipient_address: to,
-            amount: value,
-            memo,
-            label: None,
-            message: None,
-            other_params: vec![],
-        }])
-        .map_err(|e| anyhow!("Error creating transaction request: {:?}", e))?;
+        let uri = unsafe { CStr::from_ptr(zip321_uri) }.to_str()?;
+        let req = TransactionRequest::from_uri(&network, uri)
+            .map_err(|e| anyhow!("Error creating transaction request: {:?}", e))?;
 
         let fee_rule = if use_zip317_fees {
             StandardFeeRule::Zip317
@@ -2789,6 +2817,105 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
         Ok(true)
     });
     unwrap_exc_or(res, false)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_propose_shielding(
+    db_data: *const u8,
+    db_data_len: usize,
+    usk_ptr: *const u8,
+    usk_len: usize,
+    memo: *const u8,
+    shielding_threshold: u64,
+    network_id: u32,
+    min_confirmations: u32,
+    use_zip317_fees: bool,
+) -> *mut FFIRawProtobuf {
+    let res = catch_panic(|| {
+        let network = parse_network(network_id)?;
+        let min_confirmations = NonZeroU32::new(min_confirmations)
+            .ok_or(anyhow!("min_confirmations should be non-zero"))?;
+        let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
+
+        let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
+
+        let memo_bytes = if memo.is_null() {
+            MemoBytes::empty()
+        } else {
+            MemoBytes::from_bytes(unsafe { slice::from_raw_parts(memo, 512) })
+                .map_err(|e| anyhow!("Invalid MemoBytes: {}", e))?
+        };
+
+        let shielding_threshold = NonNegativeAmount::from_u64(shielding_threshold)
+            .map_err(|()| anyhow!("Invalid amount, out of range"))?;
+
+        let account = db_data
+            .get_account_for_ufvk(&usk.to_unified_full_viewing_key())?
+            .ok_or_else(|| anyhow!("Spending key not recognized."))?;
+
+        let taddrs: Vec<TransparentAddress> = db_data
+            .get_target_and_anchor_heights(NonZeroU32::MIN)
+            .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
+            .and_then(|opt_anchor| {
+                opt_anchor
+                    .map(|(target, _)| target) // Include unconfirmed funds.
+                    .ok_or_else(|| anyhow!("height not available; scan required."))
+            })
+            .and_then(|anchor| {
+                db_data
+                    .get_transparent_balances(account, anchor)
+                    .map_err(|e| {
+                        anyhow!(
+                            "Error while fetching transparent balances for {:?}: {}",
+                            account,
+                            e,
+                        )
+                    })
+            })?
+            .keys()
+            .cloned()
+            .collect();
+
+        let fee_rule = if use_zip317_fees {
+            StandardFeeRule::Zip317
+        } else {
+            #[allow(deprecated)]
+            StandardFeeRule::PreZip313
+        };
+
+        let input_selector = GreedyInputSelector::new(
+            standard::SingleOutputChangeStrategy::new(fee_rule, Some(memo_bytes)),
+            DustOutputPolicy::default(),
+        );
+
+        propose_shielding(
+            &mut db_data,
+            &network,
+            &input_selector,
+            shielding_threshold,
+            &taddrs,
+            min_confirmations,
+        )
+        .map(|proposal| {
+            if let Some(proto) = proposal::Proposal::from_standard_proposal(&network, &proposal) {
+                let mut buf = Vec::new();
+                buf.reserve(proto.encoded_len());
+                proto.encode(&mut buf).unwrap();
+                Ok(Box::into_raw(Box::new(FFIRawProtobuf::new(buf))))
+            } else {
+                Err(anyhow!("Error while serializing transfer proposal"))
+            }
+        })
+        .map_err(
+            |e: Error<
+                SqliteClientError,
+                Infallible,
+                GreedyInputSelectorError<FeeError, ReceivedNoteId>,
+                FeeError,
+            >| anyhow!("Error while proposing transfer: {}", e),
+        )?
+    });
+    unwrap_exc_or_null(res)
 }
 
 //

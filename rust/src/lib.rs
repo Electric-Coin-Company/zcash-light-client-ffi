@@ -2498,50 +2498,14 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
     unwrap_exc_or(res, false)
 }
 
-/// A struct that contains a pointer to the raw bytes of a protobuf
-///
-/// # Safety
-///
-/// - `protobuf` must be non-null and must point to an array of `protobuf_len` bytes.
-#[repr(C)]
-pub struct FFIRawProtobuf {
-    protobuf: *mut u8,
-    protobuf_len: usize,
-}
-
-impl FFIRawProtobuf {
-    fn new(protobuf_bytes: Vec<u8>) -> Self {
-        let mut raw_protobuf_bytes = ManuallyDrop::new(protobuf_bytes.into_boxed_slice());
-        FFIRawProtobuf {
-            protobuf: raw_protobuf_bytes.as_mut_ptr(),
-            protobuf_len: raw_protobuf_bytes.len(),
-        }
-    }
-}
-
-/// Frees a FFIRawProtobuf value
-///
-/// # Safety
-///
-/// - `ptr` must be non-null and must point to a struct having the layout of [`FFIRawProtobuf`].
-///   See the safety documentation of [`FFIRawProtobuf`].
-#[no_mangle]
-pub unsafe extern "C" fn zcashlc_free_raw_protobuf(ptr: *mut FFIRawProtobuf) {
-    if !ptr.is_null() {
-        let raw_protobuf: Box<FFIRawProtobuf> = unsafe { Box::from_raw(ptr) };
-        let raw_protobuf_slice: &mut [u8] =
-            unsafe { slice::from_raw_parts_mut(raw_protobuf.protobuf, raw_protobuf.protobuf_len) };
-        drop(unsafe { Box::from_raw(raw_protobuf_slice) });
-    }
-}
-
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_create_proposed_transfer(
     db_data: *const u8,
     db_data_len: usize,
     usk_ptr: *const u8,
     usk_len: usize,
-    proposal: *const FFIRawProtobuf,
+    proposal: *const u8,
+    proposal_len: usize,
     spend_params: *const u8,
     spend_params_len: usize,
     output_params: *const u8,
@@ -2553,9 +2517,8 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transfer(
         let network = parse_network(network_id)?;
         let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
-        let proposal = unsafe { proposal.read() };
         let proposal_bytes =
-            unsafe { slice::from_raw_parts(proposal.protobuf, proposal.protobuf_len) };
+            unsafe { slice::from_raw_parts(proposal, proposal_len) };
         let proposal = proposal::Proposal::decode(proposal_bytes)
             .map_err(|e| anyhow!("Error deserializing proposal protobuf: {:?}", e))
             .and_then(|p| {
@@ -2607,7 +2570,8 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
     network_id: u32,
     min_confirmations: u32,
     use_zip317_fees: bool,
-) -> *mut FFIRawProtobuf {
+    proposal_bytes_ret: *mut u8
+) -> bool {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let min_confirmations = NonZeroU32::new(min_confirmations)
@@ -2633,7 +2597,7 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
             DustOutputPolicy::default(),
         );
 
-        propose_transfer(
+        let proposal = propose_transfer(
             &mut db_data,
             &network,
             account,
@@ -2641,16 +2605,6 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
             req,
             min_confirmations,
         )
-        .map(|proposal| {
-            if let Some(proto) = proposal::Proposal::from_standard_proposal(&network, &proposal) {
-                let mut buf = Vec::new();
-                buf.reserve(proto.encoded_len());
-                proto.encode(&mut buf).unwrap();
-                Ok(Box::into_raw(Box::new(FFIRawProtobuf::new(buf))))
-            } else {
-                Err(anyhow!("Error while serializing transfer proposal"))
-            }
-        })
         .map_err(
             |e: Error<
                 SqliteClientError,
@@ -2658,10 +2612,21 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
                 GreedyInputSelectorError<FeeError, ReceivedNoteId>,
                 FeeError,
             >| anyhow!("Error while proposing transfer: {}", e),
-        )?
+        )?;
+
+        if let Some(proto) = proposal::Proposal::from_standard_proposal(&network, &proposal) {
+            let mut buf = Vec::new();
+            buf.reserve(proto.encoded_len());
+            proto.encode(&mut buf).unwrap();
+            let proposal_bytes = Box::new(buf);
+            unsafe { std::ptr::copy(proposal_bytes.as_ptr(), proposal_bytes_ret, proposal_bytes.len()); }
+            Ok(true)
+        } else {
+            Err(anyhow!("Error while serializing transfer proposal"))
+        }
     });
 
-    unwrap_exc_or_null(res)
+    unwrap_exc_or(res, false)
 }
 
 #[no_mangle]
@@ -2830,7 +2795,8 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
     network_id: u32,
     min_confirmations: u32,
     use_zip317_fees: bool,
-) -> *mut FFIRawProtobuf {
+    proposal_bytes_ret: *mut u8
+) -> bool {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let min_confirmations = NonZeroU32::new(min_confirmations)
@@ -2888,7 +2854,7 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
             DustOutputPolicy::default(),
         );
 
-        propose_shielding(
+        let proposal = propose_shielding(
             &mut db_data,
             &network,
             &input_selector,
@@ -2896,16 +2862,6 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
             &taddrs,
             min_confirmations,
         )
-        .map(|proposal| {
-            if let Some(proto) = proposal::Proposal::from_standard_proposal(&network, &proposal) {
-                let mut buf = Vec::new();
-                buf.reserve(proto.encoded_len());
-                proto.encode(&mut buf).unwrap();
-                Ok(Box::into_raw(Box::new(FFIRawProtobuf::new(buf))))
-            } else {
-                Err(anyhow!("Error while serializing transfer proposal"))
-            }
-        })
         .map_err(
             |e: Error<
                 SqliteClientError,
@@ -2913,9 +2869,20 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
                 GreedyInputSelectorError<FeeError, ReceivedNoteId>,
                 FeeError,
             >| anyhow!("Error while proposing transfer: {}", e),
-        )?
+        )?;
+
+        if let Some(proto) = proposal::Proposal::from_standard_proposal(&network, &proposal) {
+            let mut buf = Vec::new();
+            buf.reserve(proto.encoded_len());
+            proto.encode(&mut buf).unwrap();
+            let proposal_bytes = Box::new(buf);
+            unsafe { std::ptr::copy(proposal_bytes.as_ptr(), proposal_bytes_ret, proposal_bytes.len()); }
+            Ok(true)
+        } else {
+            Err(anyhow!("Error while serializing transfer proposal"))
+        }
     });
-    unwrap_exc_or_null(res)
+    unwrap_exc_or(res, false)
 }
 
 //

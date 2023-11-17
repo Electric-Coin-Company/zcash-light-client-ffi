@@ -150,18 +150,6 @@ typedef struct FFIBlocksMeta {
 } FFIBlocksMeta;
 
 /**
- * A struct that contains a pointer to the raw bytes of a protobuf
- *
- * # Safety
- *
- * - `protobuf` must be non-null and must point to an array of `protobuf_len` bytes.
- */
-typedef struct FFIRawProtobuf {
-  uint8_t *protobuf;
-  uintptr_t protobuf_len;
-} FFIRawProtobuf;
-
-/**
  * Initializes global Rust state, such as the logging infrastructure and threadpools.
  *
  * When `show_trace_logs` is `true`, Rust events at the `TRACE` level will be logged.
@@ -1111,36 +1099,30 @@ bool zcashlc_create_to_address(const uint8_t *db_data,
                                bool use_zip317_fees,
                                uint8_t *txid_bytes_ret);
 
-/**
- * Frees a FFIRawProtobuf value
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FFIRawProtobuf`].
- *   See the safety documentation of [`FFIRawProtobuf`].
- */
-void zcashlc_free_raw_protobuf(struct FFIRawProtobuf *ptr);
-
 bool zcashlc_create_proposed_transfer(const uint8_t *db_data,
                                       uintptr_t db_data_len,
                                       const uint8_t *usk_ptr,
                                       uintptr_t usk_len,
-                                      const struct FFIRawProtobuf *proposal,
+                                      const uint8_t *proposal,
+                                      uintptr_t proposal_len,
                                       const uint8_t *spend_params,
                                       uintptr_t spend_params_len,
                                       const uint8_t *output_params,
                                       uintptr_t output_params_len,
                                       uint32_t network_id,
+                                      uint32_t ovk_policy,
+                                      const uint8_t *custom_ovk_ptr,
                                       uint8_t *txid_bytes_ret);
 
-struct FFIRawProtobuf *zcashlc_propose_transfer(const uint8_t *db_data,
-                                                uintptr_t db_data_len,
-                                                const uint8_t *usk_ptr,
-                                                uintptr_t usk_len,
-                                                const char *zip321_uri,
-                                                uint32_t network_id,
-                                                uint32_t min_confirmations,
-                                                bool use_zip317_fees);
+bool zcashlc_propose_transfer(const uint8_t *db_data,
+                              uintptr_t db_data_len,
+                              const uint8_t *usk_ptr,
+                              uintptr_t usk_len,
+                              const char *zip321_uri,
+                              uint32_t network_id,
+                              uint32_t min_confirmations,
+                              bool use_zip317_fees,
+                              uint8_t *proposal_bytes_ret);
 
 int32_t zcashlc_branch_id_for_height(int32_t height, uint32_t network_id);
 
@@ -1199,12 +1181,13 @@ bool zcashlc_shield_funds(const uint8_t *db_data,
                           bool use_zip317_fees,
                           uint8_t *txid_bytes_ret);
 
-struct FFIRawProtobuf *zcashlc_propose_shielding(const uint8_t *db_data,
-                                                 uintptr_t db_data_len,
-                                                 const uint8_t *usk_ptr,
-                                                 uintptr_t usk_len,
-                                                 const uint8_t *memo,
-                                                 uint64_t shielding_threshold,
-                                                 uint32_t network_id,
-                                                 uint32_t min_confirmations,
-                                                 bool use_zip317_fees);
+bool zcashlc_propose_shielding(const uint8_t *db_data,
+                               uintptr_t db_data_len,
+                               const uint8_t *usk_ptr,
+                               uintptr_t usk_len,
+                               const uint8_t *memo,
+                               uint64_t shielding_threshold,
+                               uint32_t network_id,
+                               uint32_t min_confirmations,
+                               bool use_zip317_fees,
+                               uint8_t *proposal_bytes_ret);

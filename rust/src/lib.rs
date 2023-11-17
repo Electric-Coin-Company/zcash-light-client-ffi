@@ -2590,7 +2590,7 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
             .ok_or_else(|| anyhow!("Spending key not recognized."))?;
         let uri = unsafe { CStr::from_ptr(zip321_uri) }.to_str()?;
         let req = TransactionRequest::from_uri(&network, uri)
-            .map_err(|e| anyhow!("Error creating transaction request: {:?}", e))?;
+            .map_err(|e| anyhow!("Error parsing transaction request: {:?}", e))?;
 
         let fee_rule = if use_zip317_fees {
             StandardFeeRule::Zip317

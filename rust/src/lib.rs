@@ -5,6 +5,7 @@ use ffi_helpers::panic::catch_panic;
 use prost::Message;
 use schemer::MigratorError;
 use secrecy::Secret;
+use zcash_client_backend::data_api::TransparentInputSource;
 use std::convert::{Infallible, TryFrom, TryInto};
 use std::ffi::{CStr, CString, OsStr};
 use std::mem::ManuallyDrop;
@@ -2481,7 +2482,8 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
         let txid = spend(
             &mut db_data,
             &network,
-            prover,
+            &prover,
+            &prover,
             &input_selector,
             &usk,
             req,
@@ -2537,7 +2539,8 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transfer(
         let txid = create_proposed_transaction(
             &mut db_data,
             &network,
-            prover,
+            &prover,
+            &prover,
             &usk,
             OvkPolicy::Sender,
             &proposal,
@@ -2702,8 +2705,6 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
 ) -> bool {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
-        let min_confirmations = NonZeroU32::new(min_confirmations)
-            .ok_or(anyhow!("min_confirmations should be non-zero"))?;
         let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
         let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
@@ -2764,10 +2765,13 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
             DustOutputPolicy::default(),
         );
 
+        let prover = LocalTxProver::new(spend_params, output_params);
+
         let txid = shield_transparent_funds(
             &mut db_data,
             &network,
-            LocalTxProver::new(spend_params, output_params),
+            &prover,
+            &prover,
             &input_selector,
             shielding_threshold,
             &usk,
@@ -2799,8 +2803,6 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
 ) -> bool {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
-        let min_confirmations = NonZeroU32::new(min_confirmations)
-            .ok_or(anyhow!("min_confirmations should be non-zero"))?;
         let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
         let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
@@ -2866,7 +2868,7 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
             |e: Error<
                 SqliteClientError,
                 Infallible,
-                GreedyInputSelectorError<FeeError, ReceivedNoteId>,
+                GreedyInputSelectorError<FeeError, Infallible>,
                 FeeError,
             >| anyhow!("Error while proposing transfer: {}", e),
         )?;

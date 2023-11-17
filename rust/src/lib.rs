@@ -6,6 +6,7 @@ use prost::Message;
 use schemer::MigratorError;
 use secrecy::Secret;
 use zcash_client_backend::data_api::TransparentInputSource;
+use zcash_primitives::keys::OutgoingViewingKey;
 use std::convert::{Infallible, TryFrom, TryInto};
 use std::ffi::{CStr, CString, OsStr};
 use std::mem::ManuallyDrop;
@@ -2513,12 +2514,15 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transfer(
     output_params: *const u8,
     output_params_len: usize,
     network_id: u32,
+    ovk_policy: u32,
+    custom_ovk_ptr: *const u8,
     txid_bytes_ret: *mut u8,
 ) -> bool {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
+        let ovk_policy = unsafe { parse_ovk_policy(ovk_policy, custom_ovk_ptr) }?;
         let proposal_bytes =
             unsafe { slice::from_raw_parts(proposal, proposal_len) };
         let proposal = proposal::Proposal::decode(proposal_bytes)
@@ -2542,7 +2546,7 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transfer(
             &prover,
             &prover,
             &usk,
-            OvkPolicy::Sender,
+            ovk_policy,
             &proposal,
         )
         .map_err(
@@ -2896,5 +2900,25 @@ fn parse_network(value: u32) -> anyhow::Result<Network> {
         0 => Ok(TestNetwork),
         1 => Ok(MainNetwork),
         _ => Err(anyhow!("Invalid network type: {}. Expected either 0 or 1 for Testnet or Mainnet, respectively.", value))
+    }
+}
+
+unsafe fn parse_ovk_policy(value: u32, custom_ovk: *const u8) -> anyhow::Result<OvkPolicy> {
+    match value {
+        0 => Ok(OvkPolicy::Sender),
+        1 => {
+            match custom_ovk.is_null() {
+                false => {
+                    let mut ovk = OutgoingViewingKey([0u8; 32]);
+                    let ovk_bytes = unsafe { slice::from_raw_parts(custom_ovk, 32) };
+                    ovk.0
+                        .copy_from_slice(&ovk_bytes[..32]);
+                    Ok(OvkPolicy::Custom(ovk))
+                }
+                true => Err(anyhow!("Invalid ovk_policy. If specifying custom, a valid ovk must be passed."))
+            }
+        }
+        2 => Ok(OvkPolicy::Discard),
+        _ => Err(anyhow!("Invalid ovk_policy: {}. Expected either 0, 1, or 2 for Sender, Custom, or Discard, respectively.", value))
     }
 }

@@ -16,38 +16,31 @@ use std::ptr;
 use std::slice;
 use tracing::{debug, metadata::LevelFilter};
 use tracing_subscriber::prelude::*;
-use zcash_client_backend::data_api::{
-    chain::CommitmentTreeRoot, AccountBalance, Balance, NoteId, ShieldedProtocol,
-    WalletCommitmentTrees, WalletSummary,
-};
-use zcash_primitives::merkle_tree::HashSer;
-use zcash_primitives::sapling;
-use zcash_primitives::transaction::{components::amount::NonNegativeAmount, TxId};
 
 use zcash_address::{
-    self,
     unified::{self, Container, Encoding},
     ConversionError, ToAddress, TryFromAddress, ZcashAddress,
 };
 use zcash_client_backend::{
-    address::{RecipientAddress, UnifiedAddress},
+    address::{Address, UnifiedAddress},
     data_api::{
-        chain::scan_cached_blocks,
+        chain::{scan_cached_blocks, CommitmentTreeRoot},
         scanning::ScanPriority,
         wallet::{
             decrypt_and_store_transaction, input_selection::GreedyInputSelector,
             shield_transparent_funds, spend,
         },
-        AccountBirthday, WalletRead, WalletWrite,
+        AccountBalance, AccountBirthday, Balance, InputSource, WalletCommitmentTrees, WalletRead,
+        WalletSummary, WalletWrite,
     },
     encoding::{decode_extended_full_viewing_key, decode_extended_spending_key, AddressCodec},
     fees::{fixed, zip317, DustOutputPolicy},
-    keys::{DecodingError, Era, UnifiedFullViewingKey, UnifiedSpendingKey},
+    keys::{DecodingError, Era, UnifiedAddressRequest, UnifiedFullViewingKey, UnifiedSpendingKey},
     proto::service::TreeState,
-    wallet::{OvkPolicy, WalletTransparentOutput},
+    wallet::{NoteId, OvkPolicy, WalletTransparentOutput},
     zip321::{Payment, TransactionRequest},
+    ShieldedProtocol,
 };
-
 use zcash_client_sqlite::{
     chain::{init::init_blockmeta_db, BlockMeta},
     wallet::init::{init_wallet_db, WalletMigrationError},
@@ -59,11 +52,11 @@ use zcash_primitives::{
     consensus::{BlockHeight, BranchId, Network, Parameters},
     legacy::{self, TransparentAddress},
     memo::{Memo, MemoBytes},
+    merkle_tree::HashSer,
     transaction::{
-        components::{Amount, OutPoint, TxOut},
-        fees::fixed::FeeRule as FixedFeeRule,
-        fees::zip317::FeeRule as Zip317FeeRule,
-        Transaction,
+        components::{amount::NonNegativeAmount, Amount, OutPoint, TxOut},
+        fees::{fixed::FeeRule as FixedFeeRule, zip317::FeeRule as Zip317FeeRule},
+        Transaction, TxId,
     },
     zip32::fingerprint::SeedFingerprint,
     zip32::AccountId,
@@ -128,6 +121,13 @@ fn block_db(fsblock_db: *const u8, fsblock_db_len: usize) -> anyhow::Result<FsBl
     }));
     FsBlockDb::for_path(cache_db)
         .map_err(|e| anyhow!("Error opening block source database connection: {}", e))
+}
+
+fn account_id_from_i32(account: i32) -> anyhow::Result<AccountId> {
+    u32::try_from(account)
+        .map_err(|_| ())
+        .and_then(|id| AccountId::try_from(id).map_err(|_| ()))
+        .map_err(|_| anyhow!("Invalid account ID"))
 }
 
 /// Initializes global Rust state, such as the logging infrastructure and threadpools.
@@ -453,13 +453,8 @@ pub unsafe extern "C" fn zcashlc_derive_spending_key(
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let seed = unsafe { slice::from_raw_parts(seed, seed_len) };
-        let account = if account >= 0 {
-            account as u32
-        } else {
-            return Err(anyhow!("account ID argument must be nonnegative"));
-        };
+        let account = account_id_from_i32(account)?;
 
-        let account = AccountId::from(account);
         UnifiedSpendingKey::from_seed(&network, seed, account)
             .map_err(|e| anyhow!("error generating unified spending key from seed: {:?}", e))
             .map(move |usk| {
@@ -550,13 +545,7 @@ pub unsafe extern "C" fn zcashlc_get_current_address(
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-        let account = if account >= 0 {
-            account as u32
-        } else {
-            return Err(anyhow!("accounts argument must be positive"));
-        };
-
-        let account = AccountId::from(account);
+        let account = account_id_from_i32(account)?;
 
         match db_data.get_current_address(account) {
             Ok(Some(ua)) => {
@@ -596,15 +585,9 @@ pub unsafe extern "C" fn zcashlc_get_next_available_address(
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-        let account = if account >= 0 {
-            account as u32
-        } else {
-            return Err(anyhow!("Account id must be nonnegative."));
-        };
+        let account = account_id_from_i32(account)?;
 
-        let account = AccountId::from(account);
-
-        match db_data.get_next_available_address(account) {
+        match db_data.get_next_available_address(account, UnifiedAddressRequest::DEFAULT) {
             Ok(Some(ua)) => {
                 let address_str = ua.encode(&network);
                 Ok(CString::new(address_str).unwrap().into_raw())
@@ -642,13 +625,8 @@ pub unsafe extern "C" fn zcashlc_list_transparent_receivers(
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-        let account_id = if account_id >= 0 {
-            account_id as u32
-        } else {
-            return Err(anyhow!("Account id must be nonnegative."));
-        };
+        let account = account_id_from_i32(account_id)?;
 
-        let account = AccountId::from(account_id);
         match db_data.get_transparent_receivers(account) {
             Ok(receivers) => {
                 let keys = receivers
@@ -656,7 +634,7 @@ pub unsafe extern "C" fn zcashlc_list_transparent_receivers(
                     .map(|receiver| {
                         let address_str = receiver.encode(&network);
                         FFIEncodedKey {
-                            account_id,
+                            account_id: account.into(),
                             encoding: CString::new(address_str).unwrap().into_raw(),
                         }
                     })
@@ -844,10 +822,10 @@ pub unsafe extern "C" fn zcashlc_is_valid_shielded_address(
 }
 
 fn is_valid_shielded_address(address: &str, network: &Network) -> bool {
-    match RecipientAddress::decode(network, address) {
+    match Address::decode(network, address) {
         Some(addr) => match addr {
-            RecipientAddress::Shielded(_) => true,
-            RecipientAddress::Transparent(_) | RecipientAddress::Unified(_) => false,
+            Address::Sapling(_) => true,
+            Address::Transparent(_) | Address::Unified(_) => false,
         },
         None => false,
     }
@@ -996,10 +974,10 @@ pub unsafe extern "C" fn zcashlc_is_valid_transparent_address(
 }
 
 fn is_valid_transparent_address(address: &str, network: &Network) -> bool {
-    match RecipientAddress::decode(network, address) {
+    match Address::decode(network, address) {
         Some(addr) => match addr {
-            RecipientAddress::Shielded(_) | RecipientAddress::Unified(_) => false,
-            RecipientAddress::Transparent(_) => true,
+            Address::Sapling(_) | Address::Unified(_) => false,
+            Address::Transparent(_) => true,
         },
         None => false,
     }
@@ -1096,10 +1074,10 @@ pub unsafe extern "C" fn zcashlc_is_valid_unified_address(
 }
 
 fn is_valid_unified_address(address: &str, network: &Network) -> bool {
-    match RecipientAddress::decode(network, address) {
+    match Address::decode(network, address) {
         Some(addr) => match addr {
-            RecipientAddress::Unified(_) => true,
-            RecipientAddress::Shielded(_) | RecipientAddress::Transparent(_) => false,
+            Address::Unified(_) => true,
+            Address::Sapling(_) | Address::Transparent(_) => false,
         },
         None => false,
     }
@@ -1150,10 +1128,10 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance(
             })?
             .iter()
             .map(|utxo| utxo.txout().value)
-            .sum::<Option<Amount>>()
+            .sum::<Option<NonNegativeAmount>>()
             .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
-        Ok(amount.into())
+        Ok(Amount::from(amount).into())
     });
     unwrap_exc_or(res, -1)
 }
@@ -1184,11 +1162,8 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
         let min_confirmations = NonZeroU32::new(min_confirmations)
             .ok_or(anyhow!("min_confirmations should be non-zero"))?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-        let account = if account >= 0 {
-            AccountId::from(account as u32)
-        } else {
-            return Err(anyhow!("account argument must be positive"));
-        };
+        let account = account_id_from_i32(account)?;
+
         let amount = db_data
             .get_target_and_anchor_heights(min_confirmations)
             .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
@@ -1226,10 +1201,10 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
             .iter()
             .flatten()
             .map(|utxo| utxo.txout().value)
-            .sum::<Option<Amount>>()
+            .sum::<Option<NonNegativeAmount>>()
             .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
-        Ok(amount.into())
+        Ok(Amount::from(amount).into())
     });
     unwrap_exc_or(res, -1)
 }
@@ -1273,10 +1248,10 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance(
             })?
             .iter()
             .map(|utxo| utxo.txout().value)
-            .sum::<Option<Amount>>()
+            .sum::<Option<NonNegativeAmount>>()
             .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
-        Ok(amount.into())
+        Ok(Amount::from(amount).into())
     });
     unwrap_exc_or(res, -1)
 }
@@ -1303,11 +1278,8 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance_for_account(
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-        let account = if account >= 0 {
-            AccountId::from(account as u32)
-        } else {
-            return Err(anyhow!("account argument must be positive"));
-        };
+        let account = account_id_from_i32(account)?;
+
         let amount = db_data
             .get_target_and_anchor_heights(NonZeroU32::MIN)
             .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
@@ -1764,11 +1736,11 @@ pub struct FfiBalance {
 }
 
 impl FfiBalance {
-    fn new(balance: Balance) -> Self {
+    fn new(balance: &Balance) -> Self {
         Self {
-            spendable_value: Amount::from(balance.spendable_value).into(),
-            change_pending_confirmation: Amount::from(balance.change_pending_confirmation).into(),
-            value_pending_spendability: Amount::from(balance.value_pending_spendability).into(),
+            spendable_value: Amount::from(balance.spendable_value()).into(),
+            change_pending_confirmation: Amount::from(balance.change_pending_confirmation()).into(),
+            value_pending_spendability: Amount::from(balance.value_pending_spendability()).into(),
         }
     }
 }
@@ -1797,8 +1769,8 @@ impl FfiAccountBalance {
     fn new((account_id, balance): (&AccountId, &AccountBalance)) -> Self {
         Self {
             account_id: u32::from(*account_id),
-            sapling_balance: FfiBalance::new(balance.sapling_balance),
-            unshielded: Amount::from(balance.unshielded).into(),
+            sapling_balance: FfiBalance::new(balance.sapling_balance()),
+            unshielded: Amount::from(balance.unshielded()).into(),
         }
     }
 }
@@ -2120,7 +2092,8 @@ pub unsafe extern "C" fn zcashlc_scan_blocks(
         let from_height = BlockHeight::try_from(from_height)?;
         let limit = usize::try_from(scan_limit)?;
         match scan_cached_blocks(&network, &block_db, &mut db_data, from_height, limit) {
-            Ok(()) => Ok(1),
+            // TODO: Return ScanSummary.
+            Ok(_) => Ok(1),
             Err(e) => Err(anyhow!("Error while scanning blocks: {}", e)),
         }
     });
@@ -2174,7 +2147,8 @@ pub unsafe extern "C" fn zcashlc_put_utxo(
         let output = WalletTransparentOutput::from_parts(
             OutPoint::new(txid, index as u32),
             TxOut {
-                value: Amount::from_i64(value).unwrap(),
+                value: NonNegativeAmount::from_nonnegative_i64(value)
+                    .map_err(|_| anyhow!("Invalid UTXO value"))?,
                 script_pubkey,
             },
             BlockHeight::from(height as u32),
@@ -2491,11 +2465,8 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
 
         let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
         let to = unsafe { CStr::from_ptr(to) }.to_str()?;
-        let value =
-            Amount::from_i64(value).map_err(|()| anyhow!("Invalid amount, out of range"))?;
-        if value.is_negative() {
-            return Err(anyhow!("Amount is negative"));
-        }
+        let value = NonNegativeAmount::from_nonnegative_i64(value)
+            .map_err(|()| anyhow!("Invalid amount, out of range"))?;
         let spend_params = Path::new(OsStr::from_bytes(unsafe {
             slice::from_raw_parts(spend_params, spend_params_len)
         }));
@@ -2503,11 +2474,11 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
             slice::from_raw_parts(output_params, output_params_len)
         }));
 
-        let to = RecipientAddress::decode(&network, to)
+        let to = Address::decode(&network, to)
             .ok_or_else(|| anyhow!("PaymentAddress is for the wrong network"))?;
 
         let memo = match to {
-            RecipientAddress::Shielded(_) | RecipientAddress::Unified(_) => {
+            Address::Sapling(_) | Address::Unified(_) => {
                 if memo.is_null() {
                     Ok(None)
                 } else {
@@ -2516,7 +2487,7 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
                         .map_err(|e| anyhow!("Invalid MemoBytes: {}", e))
                 }
             }
-            RecipientAddress::Transparent(_) => {
+            Address::Transparent(_) => {
                 if memo.is_null() {
                     Ok(None)
                 } else {
@@ -2541,14 +2512,15 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
 
         let txid = if use_zip317_fees {
             let input_selector = GreedyInputSelector::new(
-                zip317::SingleOutputChangeStrategy::new(Zip317FeeRule::standard()),
+                zip317::SingleOutputChangeStrategy::new(Zip317FeeRule::standard(), None),
                 DustOutputPolicy::default(),
             );
 
             spend(
                 &mut db_data,
                 &network,
-                prover,
+                &prover,
+                &prover,
                 &input_selector,
                 &usk,
                 req,
@@ -2559,14 +2531,15 @@ pub unsafe extern "C" fn zcashlc_create_to_address(
         } else {
             #[allow(deprecated)]
             let input_selector = GreedyInputSelector::new(
-                fixed::SingleOutputChangeStrategy::new(FixedFeeRule::standard()),
+                fixed::SingleOutputChangeStrategy::new(FixedFeeRule::standard(), None),
                 DustOutputPolicy::default(),
             );
 
             spend(
                 &mut db_data,
                 &network,
-                prover,
+                &prover,
+                &prover,
                 &input_selector,
                 &usk,
                 req,
@@ -2657,8 +2630,6 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
 ) -> bool {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
-        let min_confirmations = NonZeroU32::new(min_confirmations)
-            .ok_or(anyhow!("min_confirmations should be non-zero"))?;
         let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
         let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
@@ -2707,40 +2678,45 @@ pub unsafe extern "C" fn zcashlc_shield_funds(
             .cloned()
             .collect();
 
+        let prover = LocalTxProver::new(spend_params, output_params);
+
         let txid = if use_zip317_fees {
             let input_selector = GreedyInputSelector::new(
-                zip317::SingleOutputChangeStrategy::new(Zip317FeeRule::standard()),
+                zip317::SingleOutputChangeStrategy::new(
+                    Zip317FeeRule::standard(),
+                    Some(memo_bytes),
+                ),
                 DustOutputPolicy::default(),
             );
 
             shield_transparent_funds(
                 &mut db_data,
                 &network,
-                LocalTxProver::new(spend_params, output_params),
+                &prover,
+                &prover,
                 &input_selector,
                 shielding_threshold,
                 &usk,
                 &taddrs,
-                &memo_bytes,
                 min_confirmations,
             )
             .map_err(|e| anyhow!("Error while shielding transaction: {}", e))
         } else {
             #[allow(deprecated)]
             let input_selector = GreedyInputSelector::new(
-                fixed::SingleOutputChangeStrategy::new(FixedFeeRule::standard()),
+                fixed::SingleOutputChangeStrategy::new(FixedFeeRule::standard(), Some(memo_bytes)),
                 DustOutputPolicy::default(),
             );
 
             shield_transparent_funds(
                 &mut db_data,
                 &network,
-                LocalTxProver::new(spend_params, output_params),
+                &prover,
+                &prover,
                 &input_selector,
                 shielding_threshold,
                 &usk,
                 &taddrs,
-                &memo_bytes,
                 min_confirmations,
             )
             .map_err(|e| anyhow!("Error while shielding transaction: {}", e))

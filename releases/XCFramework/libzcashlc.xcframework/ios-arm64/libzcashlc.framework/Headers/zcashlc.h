@@ -260,6 +260,28 @@ typedef struct FfiBoxedSlice {
 } FfiBoxedSlice;
 
 /**
+ * A struct that contains a pointer to, and length information for, a heap-allocated
+ * slice of `[u8; 32]` arrays.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<[u8; 32]>()`
+ *   many bytes, and it must be properly aligned. This means in particular:
+ *   - The entire memory range pointed to by `ptr` must be contained within a single
+ *     allocated object. Slices can never span across multiple allocated objects.
+ *   - `ptr` must be non-null and aligned even for zero-length slices.
+ *   - `ptr` must point to `len` consecutive properly initialized values of type
+ *     `[u8; 32]`.
+ * - The total size `len * mem::size_of::<[u8; 32]>()` of the slice pointed to
+ *   by `ptr` must be no larger than isize::MAX. See the safety documentation of
+ *   `pointer::offset`.
+ */
+typedef struct FfiTxIds {
+  uint8_t (*ptr)[32];
+  uintptr_t len;
+} FfiTxIds;
+
+/**
  * Initializes global Rust state, such as the logging infrastructure and threadpools.
  *
  * When `show_trace_logs` is `true`, Rust events at the `TRACE` level will be logged.
@@ -1167,7 +1189,6 @@ void zcashlc_free_boxed_slice(struct FfiBoxedSlice *ptr);
  * - `to` must be non-null and must point to a null-terminated UTF-8 string.
  * - `memo` must either be null (indicating an empty memo or a transparent recipient) or point to a
  *    512-byte array.
- * - `txid_bytes_ret` must be non-null and must point to an allocated 32-byte region of memory.
  */
 struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
                                                uintptr_t db_data_len,
@@ -1230,16 +1251,26 @@ void zcashlc_string_free(char *s);
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  * - `shielding_threshold` a non-negative shielding threshold amount in zatoshi
- * - `txid_bytes_ret` must be non-null and must point to an allocated 32-byte region of memory.
  */
 struct FfiBoxedSlice *zcashlc_propose_shielding(const uint8_t *db_data,
                                                 uintptr_t db_data_len,
                                                 int32_t account,
                                                 const uint8_t *memo,
                                                 uint64_t shielding_threshold,
+                                                const char *transparent_receiver,
                                                 uint32_t network_id,
                                                 uint32_t min_confirmations,
                                                 bool use_zip317_fees);
+
+/**
+ * Frees an array of FfiTxIds values as allocated by `zcashlc_create_proposed_transactions`.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`FfiTxIds`].
+ *   See the safety documentation of [`FfiTxIds`].
+ */
+void zcashlc_free_txids(struct FfiTxIds *ptr);
 
 /**
  * Creates a transaction from the given proposal.
@@ -1290,18 +1321,15 @@ struct FfiBoxedSlice *zcashlc_propose_shielding(const uint8_t *db_data,
  *   function call.
  * - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
- * - `txid_bytes_ret` must be non-null and must point to an allocated 32-byte region of
- *   memory.
  */
-bool zcashlc_create_proposed_transaction(const uint8_t *db_data,
-                                         uintptr_t db_data_len,
-                                         const uint8_t *proposal_ptr,
-                                         uintptr_t proposal_len,
-                                         const uint8_t *usk_ptr,
-                                         uintptr_t usk_len,
-                                         const uint8_t *spend_params,
-                                         uintptr_t spend_params_len,
-                                         const uint8_t *output_params,
-                                         uintptr_t output_params_len,
-                                         uint32_t network_id,
-                                         uint8_t *txid_bytes_ret);
+struct FfiTxIds *zcashlc_create_proposed_transactions(const uint8_t *db_data,
+                                                      uintptr_t db_data_len,
+                                                      const uint8_t *proposal_ptr,
+                                                      uintptr_t proposal_len,
+                                                      const uint8_t *usk_ptr,
+                                                      uintptr_t usk_len,
+                                                      const uint8_t *spend_params,
+                                                      uintptr_t spend_params_len,
+                                                      const uint8_t *output_params,
+                                                      uintptr_t output_params_len,
+                                                      uint32_t network_id);

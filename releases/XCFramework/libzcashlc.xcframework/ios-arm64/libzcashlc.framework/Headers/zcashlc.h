@@ -4,6 +4,36 @@
 #include <stdlib.h>
 
 /**
+ * A struct that contains details about an account in the wallet.
+ */
+typedef struct FfiAccount {
+  uint8_t seed_fingerprint[32];
+  uint32_t account_index;
+} FfiAccount;
+
+/**
+ * A struct that contains a pointer to, and length information for, a heap-allocated
+ * slice of [`FfiAccount`] values.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiAccount>()`
+ *   many bytes, and it must be properly aligned. This means in particular:
+ *   - The entire memory range pointed to by `ptr` must be contained within a single allocated
+ *     object. Slices can never span across multiple allocated objects.
+ *   - `ptr` must be non-null and aligned even for zero-length slices.
+ *   - `ptr` must point to `len` consecutive properly initialized values of type
+ *     [`FfiAccount`].
+ * - The total size `len * mem::size_of::<FfiAccount>()` of the slice pointed to
+ *   by `ptr` must be no larger than isize::MAX. See the safety documentation of pointer::offset.
+ * - See the safety documentation of [`FfiAccount`]
+ */
+typedef struct FfiAccounts {
+  struct FfiAccount *ptr;
+  uintptr_t len;
+} FfiAccounts;
+
+/**
  * A struct that contains an account identifier along with a pointer to the binary encoding
  * of an associated key.
  *
@@ -126,6 +156,10 @@ typedef struct FfiAccountBalance {
    */
   struct FfiBalance sapling_balance;
   /**
+   * The value of unspent Orchard outputs belonging to the account.
+   */
+  struct FfiBalance orchard_balance;
+  /**
    * The value of all unspent transparent outputs belonging to the account,
    * irrespective of confirmation depth.
    *
@@ -182,6 +216,7 @@ typedef struct FfiWalletSummary {
   int32_t fully_scanned_height;
   struct FfiScanProgress *scan_progress;
   uint64_t next_sapling_subtree_index;
+  uint64_t next_orchard_subtree_index;
 } FfiWalletSummary;
 
 /**
@@ -320,8 +355,11 @@ void zcashlc_clear_last_error(void);
  * null pointer if the caller wishes to attempt migrations without providing the wallet's seed
  * value.
  *
- * Returns 0 if successful, 1 if the seed must be provided in order to execute the requested
- * migrations, or -1 otherwise.
+ * Returns:
+ * - 0 if successful.
+ * - 1 if the seed must be provided in order to execute the requested migrations
+ * - 2 if the provided seed is not relevant to any of the derived accounts in the wallet.
+ * - -1 on error.
  *
  * # Safety
  *
@@ -342,6 +380,34 @@ int32_t zcashlc_init_data_database(const uint8_t *db_data,
                                    const uint8_t *seed,
                                    uintptr_t seed_len,
                                    uint32_t network_id);
+
+/**
+ * Frees an array of FfiAccounts values as allocated by `zcashlc_list_accounts`.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`FfiAccounts`].
+ *   See the safety documentation of [`FfiAccounts`].
+ */
+void zcashlc_free_accounts(struct FfiAccounts *ptr);
+
+/**
+ * Returns a list of the accounts in the wallet.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - Call [`zcashlc_free_accounts`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+struct FfiAccounts *zcashlc_list_accounts(const uint8_t *db_data,
+                                          uintptr_t db_data_len,
+                                          uint32_t network_id);
 
 /**
  * Frees a FFIBinaryKey value
@@ -395,6 +461,20 @@ struct FFIBinaryKey *zcashlc_create_account(const uint8_t *db_data,
                                             uintptr_t treestate_len,
                                             int64_t recover_until,
                                             uint32_t network_id);
+
+/**
+ * Checks whether the given seed is relevant to any of the accounts in the wallet.
+ *
+ * Returns:
+ * - `1` for `Ok(true)`.
+ * - `0` for `Ok(false)`.
+ * - `-1` for `Err(_)`.
+ */
+int8_t zcashlc_is_seed_relevant_to_any_derived_account(const uint8_t *db_data,
+                                                       uintptr_t db_data_len,
+                                                       const uint8_t *seed,
+                                                       uintptr_t seed_len,
+                                                       uint32_t network_id);
 
 /**
  * Frees an array of FFIEncodedKeys values as allocated by `zcashlc_derive_unified_viewing_keys_from_seed`
@@ -1013,6 +1093,8 @@ struct FfiScanSummary *zcashlc_scan_blocks(const uint8_t *fs_block_cache_root,
                                            const uint8_t *db_data,
                                            uintptr_t db_data_len,
                                            int32_t from_height,
+                                           const uint8_t *from_state,
+                                           uintptr_t from_state_len,
                                            uint32_t scan_limit,
                                            uint32_t network_id);
 

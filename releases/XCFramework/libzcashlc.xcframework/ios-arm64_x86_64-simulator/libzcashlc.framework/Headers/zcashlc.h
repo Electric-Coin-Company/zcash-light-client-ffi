@@ -925,6 +925,29 @@ bool zcashlc_put_sapling_subtree_roots(const uint8_t *db_data,
                                        uint32_t network_id);
 
 /**
+ * Adds a sequence of Orchard subtree roots to the data store.
+ *
+ * Returns true if the subtrees could be stored, false otherwise. When false is returned,
+ * caller should check for errors.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `roots` must be non-null and initialized.
+ * - The memory referenced by `roots` must not be mutated for the duration of the function call.
+ */
+bool zcashlc_put_orchard_subtree_roots(const uint8_t *db_data,
+                                       uintptr_t db_data_len,
+                                       uint64_t start_index,
+                                       const struct FfiSubtreeRoots *roots,
+                                       uint32_t network_id);
+
+/**
  * Updates the wallet's view of the blockchain.
  *
  * This method is used to provide the wallet with information about the state of the blockchain,

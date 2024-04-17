@@ -646,7 +646,7 @@ char *zcashlc_get_sapling_receiver_for_unified_address(const char *ua);
  * - `address` must be non-null and must point to a null-terminated UTF-8 string.
  * - The memory referenced by `address` must not be mutated for the duration of the function call.
  */
-bool zcashlc_is_valid_shielded_address(const char *address, uint32_t network_id);
+bool zcashlc_is_valid_sapling_address(const char *address, uint32_t network_id);
 
 /**
  * Returns the network type and address kind for the given address string,
@@ -823,6 +823,7 @@ int64_t zcashlc_get_total_transparent_balance_for_account(const uint8_t *db_data
 bool zcashlc_get_memo(const uint8_t *db_data,
                       uintptr_t db_data_len,
                       const uint8_t *txid_bytes,
+                      uint32_t output_pool,
                       uint16_t output_index,
                       uint8_t *memo_bytes_ret,
                       uint32_t network_id);

@@ -10,7 +10,7 @@ IOS_DEVICE_ARCHS = aarch64-apple-ios
 IOS_SIM_ARCHS_STABLE = x86_64-apple-ios  aarch64-apple-ios-sim
 MACOS_ARCHS = x86_64-apple-darwin aarch64-apple-darwin
 IOS_SIM_ARCHS = $(IOS_SIM_ARCHS_STABLE)
-
+FRAMEWORK_NAME = libzcashlc
 RUST_SRCS = $(shell find rust -name "*.rs") Cargo.toml
 STATIC_LIBS = $(shell find target -name "libzcashlc.a")
 
@@ -29,8 +29,7 @@ clean:
 .PHONY: clean
 
 xcframework: products/libzcashlc.xcframework
-	mkdir -p releases/XCFramework/
-	rsync -avr --exclude='*.DS_Store' products/libzcashlc.xcframework releases/XCFramework/
+	zip -r products/$(FRAMEWORK_NAME).xcframework.zip products/$(FRAMEWORK_NAME).xcframework
 .PHONY: xcframework
 
 products/libzcashlc.xcframework: $(PLATFORMS)

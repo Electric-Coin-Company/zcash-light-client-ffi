@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - "main"
+
+jobs:
+  release:
+    if: ${{  startsWith(github.event.pull_request.head.ref, 'release-') }}
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.PAT_TOKEN }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: 
+            target: x86_64-apple-darwin aarch64-apple-ios x86_64-apple-ios aarch64-apple-ios-sim
+      
+      - name: Extract SEMVER from branch name
+        id: extract_semver
+        run: echo "SEMVER=$(echo ${{ github.head_ref }} | sed 's/^release-//')" >> $GITHUB_ENV
+    
+      - name: Make Install
+        run: make install
+        
+      - name: Make Xcframework
+        run: make xcframework
+
+      - name: Compute SHA-256 checksum
+        id: checksum
+        run: echo "SHA256=$(shasum -a 256 products/libzcashlc.xcframework.zip | cut -d ' ' -f 1)" >> $GITHUB_ENV
+        
+      - name: Update Swift Package
+        run: |
+          RELEASE_URL="https://github.com/${{ github.repository }}/releases/download/${{ env.SEMVER }}/libzcashlc.xcframework.zip"
+          CHECKSUM="${{ env.SHA256 }}"
+          sed -i '' -e "s|url: .*|url: \"${RELEASE_URL}\",|g" \
+                    -e "s|checksum: .*|checksum: \"${CHECKSUM}\"|g" Package.swift
+  
+      - name: Configure Git
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+  
+      - name: Commit and Push Changes
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          git add Package.swift
+          git commit -m "Update Swift package for release ${{ env.SEMVER }}"
+          git push
+  
+      - name: Tag the Release
+        env:
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          TAG_NAME="${{ env.SEMVER }}"
+          git tag $TAG_NAME
+          git push https://x-access-token:${PAT_TOKEN}@github.com/${{ github.repository }} $TAG_NAME
+    
+      - name: Fetch all tags
+        run: git fetch --tags
+    
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          TAG_NAME="${{ env.SEMVER }}"
+          PREVIOUS_TAG=$(git tag --sort=-v:refname | grep -E 'v[0-9]+\.[0-9]+\.[0-9]+' | sed -n '2p')
+          RELEASE_NOTES=$(git log ${PREVIOUS_TAG}..HEAD --pretty=format:"%h - %s (%an, %ad)" --date=short)
+          echo "RELEASE_NOTES=${RELEASE_NOTES}" >> $GITHUB_ENV
+    
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        with:
+            tag_name: ${{ env.SEMVER }}
+            release_name: Release ${{ env.SEMVER }}
+            body: |
+              ### Changes since last release
+              ${{ env.RELEASE_NOTES }}
+  
+              ### Checksum
+              ```plaintext
+              ${{ env.SHA256 }}
+              ```
+            draft: false
+            prerelease: false
+  
+      - name: Upload XCFramework to Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.PAT_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: products/libzcashlc.xcframework.zip
+          asset_name: libzcashlc.xcframework.zip
+          asset_content_type: application/zip

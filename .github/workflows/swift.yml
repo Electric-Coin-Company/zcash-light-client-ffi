@@ -1,0 +1,25 @@
+name: Swift Build & Test
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+        - Package.swift
+
+  pull_request:
+    branches-ignore: ["release-*.*.*"]
+    paths:
+        - Package.swift
+
+env: 
+  CARGO_TERM_COLOR: always
+
+jobs:
+    build_and_test_swift:
+        if: ${{ ! startsWith(github.event.pull_request.head.ref, 'release-') }}
+        name: Build Swift Package
+        runs-on: macos-latest
+        
+        steps:
+        - uses: actions/checkout@v4
+        - run: swift build --verbose

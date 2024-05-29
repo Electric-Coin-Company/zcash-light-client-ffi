@@ -45,10 +45,19 @@ Depending on what state the intermediate build products might be in, you may fir
 
 ### Swift Package Manager
 
-1. Build the framework as described above.
-2. Commit the result.
-3. Tag this commit with the new release version, (following semantic versioning).
-4. Push the commit and tag to the remote repository.
+#### Using CI
+
+1. Tag the desired commit with the new release version, (following semantic versioning).
+2. Push the tag to the remote repository.
+3. check that the github action has finished properly
+
+#### manually
+1. tag the commit to the remote repository
+2. run `make xcframework`
+3. get the xcframework.zip located inside products and get the sha256 using `shasum -a 256 products/libzcashlc.xcframework.zip | cut -d ' ' -f 1`
+4. don't commit the binaries to github!!!
+5. create a new Github release using the website or the Github CLI
+6. make sure to include the `libzcashlc.xcframework.zip` file and the checksum in the release notes
 
 ## License
 

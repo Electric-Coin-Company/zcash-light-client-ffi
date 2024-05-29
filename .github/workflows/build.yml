@@ -1,0 +1,19 @@
+name: Rust
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches-ignore: ["release-*.*.*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    if: ${{ ! startsWith(github.event.pull_request.head.ref, 'release-') }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: cd rust && cargo build --verbose

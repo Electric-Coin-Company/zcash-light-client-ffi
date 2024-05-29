@@ -1,0 +1,23 @@
+on:
+    push:
+      paths:
+        - rust
+    pull_request:
+      paths:
+        - rust
+      branches-ignore: 
+        - "release-*.*.*"
+name: Clippy check
+
+# Make sure CI fails on all warnings, including Clippy lints
+env:
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  clippy_check:
+    if: ${{ ! startsWith(github.event.pull_request.head.ref, 'release-') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Clippy
+        run: cd rust && cargo clippy --all-features

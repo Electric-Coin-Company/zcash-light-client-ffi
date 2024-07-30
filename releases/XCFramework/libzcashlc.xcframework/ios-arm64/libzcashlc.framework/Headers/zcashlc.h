@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+typedef struct TorRuntime TorRuntime;
+
 /**
  * A struct that contains details about an account in the wallet.
  */
@@ -277,17 +279,20 @@ typedef struct FFIBlocksMeta {
 } FFIBlocksMeta;
 
 /**
- * A struct that contains a pointer to, and length information for, a heap-allocated
- * boxed slice.
+ * A struct that optionally contains a pointer to, and length information for, a
+ * heap-allocated boxed slice.
+ *
+ * This is an FFI representation of `Option<Box<[u8]>>`.
  *
  * # Safety
  *
- * - `ptr` must be non-null and valid for reads for `len` bytes, and it must have an
- *   alignment of `1`. Its contents must be an encoded Proposal protobuf.
+ * - If `ptr` is non-null, it must be valid for reads for `len` bytes, and it must have
+ *   an alignment of `1`.
  * - The memory referenced by `ptr` must not be mutated for the lifetime of the struct
  *   (up until [`zcashlc_free_boxed_slice`] is called with it).
  * - The total size `len` must be no larger than `isize::MAX`. See the safety
  *   documentation of `pointer::offset`.
+ *   - When `ptr` is null, `len` should be zero.
  */
 typedef struct FfiBoxedSlice {
   uint8_t *ptr;
@@ -317,15 +322,43 @@ typedef struct FfiTxIds {
 } FfiTxIds;
 
 /**
+ * A decimal suitable for converting into an `NSDecimalNumber`.
+ */
+typedef struct Decimal {
+  uint64_t mantissa;
+  int16_t exponent;
+  bool is_sign_negative;
+} Decimal;
+
+/**
  * Initializes global Rust state, such as the logging infrastructure and threadpools.
  *
- * When `show_trace_logs` is `true`, Rust events at the `TRACE` level will be logged.
+ * `log_level` defines how the Rust layer logs its events. These values are supported,
+ * each level logging more information in addition to the earlier levels:
+ * - `off`: The logs are completely disabled.
+ * - `error`: Logs very serious errors.
+ * - `warn`: Logs hazardous situations.
+ * - `info`: Logs useful information.
+ * - `debug`: Logs lower priority information.
+ * - `trace`: Logs very low priority, often extremely verbose, information.
+ *
+ * # Safety
+ *
+ * - The memory pointed to by `log_level` must contain a valid nul terminator at the end
+ *   of the string.
+ * - `log_level` must be valid for reads of bytes up to and including the nul terminator.
+ *   This means in particular:
+ *   - The entire memory range of this `CStr` must be contained within a single allocated
+ *     object!
+ * - The memory referenced by the returned `CStr` must not be mutated for the duration of
+ *   the function call.
+ * - The nul terminator must be within `isize::MAX` from `log_level`.
  *
  * # Panics
  *
  * This method panics if called more than once.
  */
-void zcashlc_init_on_load(bool show_trace_logs);
+void zcashlc_init_on_load(const char *log_level);
 
 /**
  * Returns the length of the last error message to be logged.
@@ -469,6 +502,20 @@ struct FFIBinaryKey *zcashlc_create_account(const uint8_t *db_data,
  * - `1` for `Ok(true)`.
  * - `0` for `Ok(false)`.
  * - `-1` for `Err(_)`.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `seed` must be non-null and valid for reads for `seed_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `seed` must not be mutated for the duration of the function call.
+ * - The total size `seed_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of pointer::offset.
  */
 int8_t zcashlc_is_seed_relevant_to_any_derived_account(const uint8_t *db_data,
                                                        uintptr_t db_data_len,
@@ -638,17 +685,6 @@ char *zcashlc_get_transparent_receiver_for_unified_address(const char *ua);
 char *zcashlc_get_sapling_receiver_for_unified_address(const char *ua);
 
 /**
- * Returns true when the provided address decodes to a valid Sapling payment address for the
- * specified network, false in any other case.
- *
- * # Safety
- *
- * - `address` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `address` must not be mutated for the duration of the function call.
- */
-bool zcashlc_is_valid_sapling_address(const char *address, uint32_t network_id);
-
-/**
  * Returns the network type and address kind for the given address string,
  * if the address is a valid Zcash address.
  *
@@ -657,6 +693,7 @@ bool zcashlc_is_valid_sapling_address(const char *address, uint32_t network_id);
  * * p2sh: 1
  * * sapling: 2
  * * unified: 3
+ * * tex: 4
  *
  * # Safety
  *
@@ -666,17 +703,6 @@ bool zcashlc_is_valid_sapling_address(const char *address, uint32_t network_id);
 bool zcashlc_get_address_metadata(const char *address,
                                   uint32_t *network_id_ret,
                                   uint32_t *addr_kind_ret);
-
-/**
- * Returns true when the address is a valid transparent payment address for the specified network,
- * false in any other case.
- *
- * # Safety
- *
- * - `address` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `address` must not be mutated for the duration of the function call.
- */
-bool zcashlc_is_valid_transparent_address(const char *address, uint32_t network_id);
 
 /**
  * Returns true when the provided key decodes to a valid Sapling extended spending key for the
@@ -711,18 +737,6 @@ bool zcashlc_is_valid_viewing_key(const char *key, uint32_t network_id);
  *   function call.
  */
 bool zcashlc_is_valid_unified_full_viewing_key(const char *ufvk, uint32_t network_id);
-
-/**
- * Returns true when the provided key decodes to a valid unified address for the
- * specified network, false in any other case.
- *
- * # Safety
- *
- * - `address` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `address` must not be mutated for the duration of the
- *   function call.
- */
-bool zcashlc_is_valid_unified_address(const char *address, uint32_t network_id);
 
 /**
  * Returns the verified transparent balance for `address`, which ignores utxos that have been
@@ -1295,6 +1309,8 @@ void zcashlc_free_boxed_slice(struct FfiBoxedSlice *ptr);
  * - `to` must be non-null and must point to a null-terminated UTF-8 string.
  * - `memo` must either be null (indicating an empty memo or a transparent recipient) or point to a
  *    512-byte array.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
  */
 struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
                                                uintptr_t db_data_len,
@@ -1322,7 +1338,9 @@ struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
  * - `payment_uri` must be non-null and must point to a null-terminated UTF-8 string.
  * - `network_id` a u32. 0 for Testnet and 1 for Mainnet
  * - `min_confirmations` number of confirmations of the funds to spend
- * - `use_zip317_fees` `true`` to use ZIP-317 fees.
+ * - `use_zip317_fees` `true` to use ZIP-317 fees.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
  */
 struct FfiBoxedSlice *zcashlc_propose_transfer_from_uri(const uint8_t *db_data,
                                                         uintptr_t db_data_len,
@@ -1357,6 +1375,8 @@ void zcashlc_string_free(char *s);
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  * - `shielding_threshold` a non-negative shielding threshold amount in zatoshi
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
  */
 struct FfiBoxedSlice *zcashlc_propose_shielding(const uint8_t *db_data,
                                                 uintptr_t db_data_len,
@@ -1439,3 +1459,47 @@ struct FfiTxIds *zcashlc_create_proposed_transactions(const uint8_t *db_data,
                                                       const uint8_t *output_params,
                                                       uintptr_t output_params_len,
                                                       uint32_t network_id);
+
+/**
+ * Creates a Tor runtime.
+ *
+ * # Safety
+ *
+ * - `tor_dir` must be non-null and valid for reads for `tor_dir_len` bytes, and it must
+ *   have an alignment of `1`. Its contents must be a string representing a valid system
+ *   path in the operating system's preferred representation.
+ * - The memory referenced by `tor_dir` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `tor_dir_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - Call [`zcashlc_free_tor_runtime`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct TorRuntime *zcashlc_create_tor_runtime(const uint8_t *tor_dir, uintptr_t tor_dir_len);
+
+/**
+ * Frees a Tor runtime.
+ *
+ * # Safety
+ *
+ * - If `ptr` is non-null, it must point to a struct having the layout of [`TorRuntime`].
+ */
+void zcashlc_free_tor_runtime(struct TorRuntime *ptr);
+
+/**
+ * Fetches the current ZEC-USD exchange rate over Tor.
+ *
+ * The result is a `u128` containing a packed decimal:
+ * - Bits 16-23: Contains "e", a value between 0-28 that indicates the scale.
+ * - Bit 31: the sign of the Decimal value, 0 meaning positive and 1 meaning negative.
+ * - Bits 32-127: Contains the representation of the Decimal value as a 96-bit integer.
+ *
+ * Returns a negative value on error.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be non-null and point to a struct having the layout of
+ *   [`TorRuntime`].
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ */
+struct Decimal zcashlc_get_exchange_rate_usd(struct TorRuntime *tor_runtime);

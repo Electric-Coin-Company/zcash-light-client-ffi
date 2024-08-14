@@ -322,6 +322,135 @@ typedef struct FfiTxIds {
 } FfiTxIds;
 
 /**
+ * Metadata about the status of a transaction obtained by inspecting the chain state.
+ */
+enum FfiTransactionStatus_Tag {
+  /**
+   * The requested transaction ID was not recognized by the node.
+   */
+  TxidNotRecognized,
+  /**
+   * The requested transaction ID corresponds to a transaction that is recognized by the node,
+   * but is in the mempool or is otherwise not mined in the main chain (but may have been mined
+   * on a fork that was reorged away).
+   */
+  NotInMainChain,
+  /**
+   * The requested transaction ID corresponds to a transaction that has been included in the
+   * block at the provided height.
+   */
+  Mined,
+};
+typedef uint8_t FfiTransactionStatus_Tag;
+
+typedef struct FfiTransactionStatus {
+  FfiTransactionStatus_Tag tag;
+  union {
+    struct {
+      uint32_t mined;
+    };
+  };
+} FfiTransactionStatus;
+
+/**
+ * A request for transaction data enhancement, spentness check, or discovery
+ * of spends from a given transparent address within a specific block range.
+ */
+enum FfiTransactionDataRequest_Tag {
+  /**
+   * Information about the chain's view of a transaction is requested.
+   *
+   * The caller evaluating this request on behalf of the wallet backend should respond to this
+   * request by determining the status of the specified transaction with respect to the main
+   * chain; if using `lightwalletd` for access to chain data, this may be obtained by
+   * interpreting the results of the [`GetTransaction`] RPC method. It should then call
+   * [`WalletWrite::set_transaction_status`] to provide the resulting transaction status
+   * information to the wallet backend.
+   *
+   * [`GetTransaction`]: crate::proto::service::compact_tx_streamer_client::CompactTxStreamerClient::get_transaction
+   */
+  GetStatus,
+  /**
+   * Transaction enhancement (download of complete raw transaction data) is requested.
+   *
+   * The caller evaluating this request on behalf of the wallet backend should respond to this
+   * request by providing complete data for the specified transaction to
+   * [`wallet::decrypt_and_store_transaction`]; if using `lightwalletd` for access to chain
+   * state, this may be obtained via the [`GetTransaction`] RPC method. If no data is available
+   * for the specified transaction, this should be reported to the backend using
+   * [`WalletWrite::set_transaction_status`]. A [`TransactionDataRequest::Enhancement`] request
+   * subsumes any previously existing [`TransactionDataRequest::GetStatus`] request.
+   *
+   * [`GetTransaction`]: crate::proto::service::compact_tx_streamer_client::CompactTxStreamerClient::get_transaction
+   */
+  Enhancement,
+  /**
+   * Information about transactions that receive or spend funds belonging to the specified
+   * transparent address is requested.
+   *
+   * Fully transparent transactions, and transactions that do not contain either shielded inputs
+   * or shielded outputs belonging to the wallet, may not be discovered by the process of chain
+   * scanning; as a consequence, the wallet must actively query to find transactions that spend
+   * such funds. Ideally we'd be able to query by [`OutPoint`] but this is not currently
+   * functionality that is supported by the light wallet server.
+   *
+   * The caller evaluating this request on behalf of the wallet backend should respond to this
+   * request by detecting transactions involving the specified address within the provided block
+   * range; if using `lightwalletd` for access to chain data, this may be performed using the
+   * [`GetTaddressTxids`] RPC method. It should then call [`wallet::decrypt_and_store_transaction`]
+   * for each transaction so detected.
+   *
+   * [`GetTaddressTxids`]: crate::proto::service::compact_tx_streamer_client::CompactTxStreamerClient::get_taddress_txids
+   */
+  SpendsFromAddress,
+};
+typedef uint8_t FfiTransactionDataRequest_Tag;
+
+typedef struct SpendsFromAddress_Body {
+  char *address;
+  uint32_t block_range_start;
+  /**
+   * An optional end height; no end height is represented as `-1`
+   */
+  int64_t block_range_end;
+} SpendsFromAddress_Body;
+
+typedef struct FfiTransactionDataRequest {
+  FfiTransactionDataRequest_Tag tag;
+  union {
+    struct {
+      uint8_t get_status[32];
+    };
+    struct {
+      uint8_t enhancement[32];
+    };
+    SpendsFromAddress_Body spends_from_address;
+  };
+} FfiTransactionDataRequest;
+
+/**
+ * A struct that contains a pointer to, and length information for, a heap-allocated
+ * slice of [`FfiTransactionDataRequest`] values.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiTransactionDataRequest>()`
+ *   many bytes, and it must be properly aligned. This means in particular:
+ *   - The entire memory range pointed to by `ptr` must be contained within a single allocated
+ *     object. Slices can never span across multiple allocated objects.
+ *   - `ptr` must be non-null and aligned even for zero-length slices.
+ *   - `ptr` must point to `len` consecutive properly initialized values of type
+ *     [`FfiTransactionDataRequest`].
+ * - The total size `len * mem::size_of::<FfiTransactionDataRequest>()` of the slice pointed to
+ *   by `ptr` must be no larger than isize::MAX. See the safety documentation of pointer::offset.
+ * - See the safety documentation of [`FfiTransactionDataRequest`]
+ */
+typedef struct FfiTransactionDataRequests {
+  struct FfiTransactionDataRequest *ptr;
+  uintptr_t len;
+} FfiTransactionDataRequests;
+
+/**
  * A decimal suitable for converting into an `NSDecimalNumber`.
  */
 typedef struct Decimal {
@@ -1280,7 +1409,7 @@ int32_t zcashlc_decrypt_and_store_transaction(const uint8_t *db_data,
                                               uintptr_t db_data_len,
                                               const uint8_t *tx,
                                               uintptr_t tx_len,
-                                              uint32_t _mined_height,
+                                              int64_t mined_height,
                                               uint32_t network_id);
 
 /**
@@ -1459,6 +1588,60 @@ struct FfiTxIds *zcashlc_create_proposed_transactions(const uint8_t *db_data,
                                                       const uint8_t *output_params,
                                                       uintptr_t output_params_len,
                                                       uint32_t network_id);
+
+/**
+ * Sets the transaction status to the provided value.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must
+ *   have an alignment of `1`. Its contents must be a string representing a valid system
+ *   path in the operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `txid_bytes` must be non-null and valid for reads for `db_data_len` bytes, and it must have
+ *   an alignment of `1`.
+ * - The memory referenced by `txid_bytes_len` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `txid_bytes_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ */
+void zcashlc_set_transaction_status(const uint8_t *db_data,
+                                    uintptr_t db_data_len,
+                                    uint32_t network_id,
+                                    const uint8_t *txid_bytes,
+                                    uintptr_t txid_bytes_len,
+                                    struct FfiTransactionStatus status);
+
+/**
+ * Frees an array of FfiTransactionDataRequest values as allocated by `zcashlc_transaction_data_requests`.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`FfiTransactionDataRequests`].
+ *   See the safety documentation of [`FfiTransactionDataRequests`].
+ */
+void zcashlc_free_transaction_data_requests(struct FfiTransactionDataRequests *ptr);
+
+/**
+ * Returns a list of transaction data requests that the network client should satisfy.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - Call [`zcashlc_free_transaction_data_requests`] to free the memory associated with the
+ *   returned pointer when done using it.
+ */
+struct FfiTransactionDataRequests *zcashlc_transaction_data_requests(const uint8_t *db_data,
+                                                                     uintptr_t db_data_len,
+                                                                     uint32_t network_id);
 
 /**
  * Creates a Tor runtime.

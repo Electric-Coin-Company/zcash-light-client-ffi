@@ -58,10 +58,10 @@ crate-type = ["staticlib"]
 lto = true
 
 [patch.crates-io]
-zcash_address = { git = "https://github.com/nuttycom/librustzcash.git", rev = "3089e3b29d398d68853d98ba45ca673cc7794227" }
-zcash_client_backend = { git = "https://github.com/nuttycom/librustzcash.git", rev = "3089e3b29d398d68853d98ba45ca673cc7794227" }
-zcash_client_sqlite = { git = "https://github.com/nuttycom/librustzcash.git", rev = "3089e3b29d398d68853d98ba45ca673cc7794227" }
-zcash_encoding = { git = "https://github.com/nuttycom/librustzcash.git", rev = "3089e3b29d398d68853d98ba45ca673cc7794227" }
-zcash_primitives = { git = "https://github.com/nuttycom/librustzcash.git", rev = "3089e3b29d398d68853d98ba45ca673cc7794227" }
-zcash_proofs = { git = "https://github.com/nuttycom/librustzcash.git", rev = "3089e3b29d398d68853d98ba45ca673cc7794227" }
-zcash_protocol = { git = "https://github.com/nuttycom/librustzcash.git", rev = "3089e3b29d398d68853d98ba45ca673cc7794227" }
+zcash_address = { git = "https://github.com/nuttycom/librustzcash.git", rev = "25b9ccb4dab779082f62eb583c8d022b5f342d6f" }
+zcash_client_backend = { git = "https://github.com/nuttycom/librustzcash.git", rev = "25b9ccb4dab779082f62eb583c8d022b5f342d6f" }
+zcash_client_sqlite = { git = "https://github.com/nuttycom/librustzcash.git", rev = "25b9ccb4dab779082f62eb583c8d022b5f342d6f" }
+zcash_encoding = { git = "https://github.com/nuttycom/librustzcash.git", rev = "25b9ccb4dab779082f62eb583c8d022b5f342d6f" }
+zcash_primitives = { git = "https://github.com/nuttycom/librustzcash.git", rev = "25b9ccb4dab779082f62eb583c8d022b5f342d6f" }
+zcash_proofs = { git = "https://github.com/nuttycom/librustzcash.git", rev = "25b9ccb4dab779082f62eb583c8d022b5f342d6f" }
+zcash_protocol = { git = "https://github.com/nuttycom/librustzcash.git", rev = "25b9ccb4dab779082f62eb583c8d022b5f342d6f" }

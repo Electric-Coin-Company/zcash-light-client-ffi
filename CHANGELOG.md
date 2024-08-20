@@ -6,6 +6,39 @@ and this library adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.9.0 - 2024-08-20
+
+### Added
+- `zcashlc_create_tor_runtime`
+- `zcashlc_free_tor_runtime`
+- `zcashlc_get_exchange_rate_usd`
+- `zcashlc_set_transaction_status`
+- `zcashlc_transaction_data_requests`
+- `zcashlc_free_transaction_data_requests`
+- `FfiTransactionStatus_Tag`
+- `FfiTransactionStatus`
+- `FfiTransactionDataRequest_Tag`
+- `SpendsFromAddress_Body`
+- `FfiTransactionDataRequest`
+- `FfiTransactionDataRequests`
+- `Decimal`
+
+### Changed
+- MSRV is now 1.80.
+- Migrated to `zcash_client_sqlite 0.11`.
+- `zcashlc_init_on_load` now takes a log level filter as a UTF-8 C string, instead of
+  a boolean.
+- The following methods now support ZIP 320 (TEX) addresses:
+  - `zcashlc_get_address_metadata`
+  - `zcashlc_propose_transfer`
+- `zcashlc_decrypt_and_store_transaction` now takes its `mined_height` argument
+  as `int64_t`. This allows callers to pass the value of `mined_height` as
+  returned by the zcashd `getrawtransaction` RPC method.
+
+### Removed
+- `zcashlc_is_valid_sapling_address`, `zcashlc_is_valid_transparent_address`,
+  `zcashlc_is_valid_unified_address` (use `zcashlc_get_address_metadata` instead).
+
 ## 0.8.1 - 2024-06-14
 
 ### Fixed
@@ -42,8 +75,8 @@ and this library adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## 0.7.1 - 2024-03-25
 
-- Updates to `zcash_client_sqlite` version 0.10.1 to fix an incorrect 
-  constraint on the `sent_notes` table. Databases built or upgraded 
+- Updates to `zcash_client_sqlite` version 0.10.1 to fix an incorrect
+  constraint on the `sent_notes` table. Databases built or upgraded
   using version 0.7.0 will need to be deleted and restored from seed.
 
 ## 0.7.0 - 2024-03-25
@@ -106,7 +139,7 @@ This release updates the `librustzcash` dependencies to the stable interim tag
 `ecc_sdk-20240129`. This provides improvements to wallet query performance that
 have not yet been released in a published version of the `zcash_client_sqlite`
 crate, as well as numerous unreleased changes to the `zcash_client_backend` and
-`zcash_primitives` crates. 
+`zcash_primitives` crates.
 
 ### Added
 - FFI data structures:
@@ -151,7 +184,7 @@ Updated dependencies:
 ### Notable Changes
 
 This release overhauls the FFI library to provide support for allowing wallets to
-spend funds without fully syncing the blockchain. This results in significant 
+spend funds without fully syncing the blockchain. This results in significant
 changes to much of the API; it is recommended that users review the changes
 from the previous release carefully.
 

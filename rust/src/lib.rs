@@ -11,11 +11,14 @@ use std::mem::ManuallyDrop;
 use std::num::NonZeroU32;
 use std::os::raw::c_char;
 use std::os::unix::ffi::OsStrExt;
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::ptr;
 use std::slice;
+use tor_rtcompat::BlockOn;
 use tracing::{debug, metadata::LevelFilter};
 use tracing_subscriber::prelude::*;
+use zcash_client_backend::data_api::TransactionStatus;
 
 use zcash_address::{
     unified::{self, Container, Encoding},
@@ -31,12 +34,14 @@ use zcash_client_backend::{
             input_selection::GreedyInputSelector, propose_shielding, propose_transfer,
         },
         Account, AccountBalance, AccountBirthday, AccountSource, Balance, InputSource,
-        SeedRelevance, WalletCommitmentTrees, WalletRead, WalletSummary, WalletWrite,
+        SeedRelevance, TransactionDataRequest, WalletCommitmentTrees, WalletRead, WalletSummary,
+        WalletWrite,
     },
     encoding::{decode_extended_full_viewing_key, decode_extended_spending_key, AddressCodec},
     fees::{standard::SingleOutputChangeStrategy, DustOutputPolicy},
     keys::{DecodingError, Era, UnifiedAddressRequest, UnifiedFullViewingKey, UnifiedSpendingKey},
     proto::{proposal::Proposal, service::TreeState},
+    tor::http::cryptex,
     wallet::{NoteId, OvkPolicy, WalletTransparentOutput},
     zip321::{Payment, TransactionRequest},
     ShieldedProtocol,
@@ -63,9 +68,12 @@ use zcash_primitives::{
 use zcash_proofs::prover::LocalTxProver;
 
 mod ffi;
+mod tor;
 
 #[cfg(target_vendor = "apple")]
 mod os_log;
+
+use crate::tor::TorRuntime;
 
 fn unwrap_exc_or<T>(exc: Result<T, ()>, def: T) -> T {
     match exc {
@@ -178,13 +186,49 @@ fn account_id_from_ffi<P: Parameters>(
 
 /// Initializes global Rust state, such as the logging infrastructure and threadpools.
 ///
-/// When `show_trace_logs` is `true`, Rust events at the `TRACE` level will be logged.
+/// `log_level` defines how the Rust layer logs its events. These values are supported,
+/// each level logging more information in addition to the earlier levels:
+/// - `off`: The logs are completely disabled.
+/// - `error`: Logs very serious errors.
+/// - `warn`: Logs hazardous situations.
+/// - `info`: Logs useful information.
+/// - `debug`: Logs lower priority information.
+/// - `trace`: Logs very low priority, often extremely verbose, information.
+///
+/// # Safety
+///
+/// - The memory pointed to by `log_level` must contain a valid nul terminator at the end
+///   of the string.
+/// - `log_level` must be valid for reads of bytes up to and including the nul terminator.
+///   This means in particular:
+///   - The entire memory range of this `CStr` must be contained within a single allocated
+///     object!
+/// - The memory referenced by the returned `CStr` must not be mutated for the duration of
+///   the function call.
+/// - The nul terminator must be within `isize::MAX` from `log_level`.
 ///
 /// # Panics
 ///
 /// This method panics if called more than once.
 #[no_mangle]
-pub extern "C" fn zcashlc_init_on_load(show_trace_logs: bool) {
+pub unsafe extern "C" fn zcashlc_init_on_load(log_level: *const c_char) {
+    let log_filter = if log_level.is_null() {
+        eprintln!("log_level not provided, falling back on 'debug' level");
+        LevelFilter::DEBUG
+    } else {
+        unsafe { CStr::from_ptr(log_level) }
+            .to_str()
+            .unwrap_or_else(|_| {
+                eprintln!("log_level not UTF-8, falling back on 'debug' level");
+                "debug"
+            })
+            .parse()
+            .unwrap_or_else(|_| {
+                eprintln!("log_level not a valid level, falling back on 'debug' level");
+                LevelFilter::DEBUG
+            })
+    };
+
     // Set up the tracing layers for the Apple OS logging framework.
     #[cfg(target_vendor = "apple")]
     let (log_layer, signpost_layer) = os_log::layers("co.electriccoin.ios", "rust");
@@ -193,13 +237,7 @@ pub extern "C" fn zcashlc_init_on_load(show_trace_logs: bool) {
     let registry = tracing_subscriber::registry();
     #[cfg(target_vendor = "apple")]
     let registry = registry.with(log_layer).with(signpost_layer);
-    registry
-        .with(if show_trace_logs {
-            LevelFilter::TRACE
-        } else {
-            LevelFilter::DEBUG
-        })
-        .init();
+    registry.with(log_filter).init();
 
     // Log panics instead of writing them to stderr.
     log_panics::init();
@@ -343,16 +381,8 @@ pub struct FfiAccounts {
 
 impl FfiAccounts {
     pub fn ptr_from_vec(v: Vec<FfiAccount>) -> *mut Self {
-        // Going from Vec<_> to Box<[_]> just drops the (extra) `capacity`
-        let boxed_slice: Box<[FfiAccount]> = v.into_boxed_slice();
-        let len = boxed_slice.len();
-        let fat_ptr: *mut [FfiAccount] = Box::into_raw(boxed_slice);
-        // It is guaranteed to be possible to obtain a raw pointer to the start
-        // of a slice by casting the pointer-to-slice, as documented e.g. at
-        // <https://doc.rust-lang.org/std/primitive.pointer.html#method.as_mut_ptr>.
-        // TODO: replace with `as_mut_ptr()` when that is stable.
-        let slim_ptr: *mut FfiAccount = fat_ptr as _;
-        Box::into_raw(Box::new(FfiAccounts { ptr: slim_ptr, len }))
+        let (ptr, len) = ptr_from_vec(v);
+        Box::into_raw(Box::new(FfiAccounts { ptr, len }))
     }
 }
 
@@ -366,13 +396,7 @@ impl FfiAccounts {
 pub unsafe extern "C" fn zcashlc_free_accounts(ptr: *mut FfiAccounts) {
     if !ptr.is_null() {
         let s: Box<FfiAccounts> = unsafe { Box::from_raw(ptr) };
-
-        if !s.ptr.is_null() {
-            let slice: &mut [FfiAccount] = unsafe { slice::from_raw_parts_mut(s.ptr, s.len) };
-            let boxed_slice = unsafe { Box::from_raw(slice) };
-            drop(boxed_slice);
-        }
-
+        free_ptr_from_vec(s.ptr, s.len);
         drop(s);
     }
 }
@@ -414,7 +438,7 @@ pub unsafe extern "C" fn zcashlc_list_accounts(
                             seed_fingerprint: seed_fingerprint.to_bytes(),
                             account_index: account_index.into(),
                         }),
-                        AccountSource::Imported => Err(anyhow!(
+                        AccountSource::Imported { .. } => Err(anyhow!(
                             "Wallet DB contains imported accounts, which are unsuppported"
                         )),
                     }
@@ -440,11 +464,11 @@ pub struct FFIBinaryKey {
 
 impl FFIBinaryKey {
     fn new(account_id: zip32::AccountId, key_bytes: Vec<u8>) -> Self {
-        let mut raw_key_bytes = ManuallyDrop::new(key_bytes.into_boxed_slice());
+        let (encoding, encoding_len) = ptr_from_vec(key_bytes);
         FFIBinaryKey {
             account_id: account_id.into(),
-            encoding: raw_key_bytes.as_mut_ptr(),
-            encoding_len: raw_key_bytes.len(),
+            encoding,
+            encoding_len,
         }
     }
 }
@@ -459,9 +483,8 @@ impl FFIBinaryKey {
 pub unsafe extern "C" fn zcashlc_free_binary_key(ptr: *mut FFIBinaryKey) {
     if !ptr.is_null() {
         let key: Box<FFIBinaryKey> = unsafe { Box::from_raw(ptr) };
-        let key_slice: &mut [u8] =
-            unsafe { slice::from_raw_parts_mut(key.encoding, key.encoding_len) };
-        drop(unsafe { Box::from_raw(key_slice) });
+        free_ptr_from_vec(key.encoding, key.encoding_len);
+        drop(key);
     }
 }
 
@@ -536,7 +559,7 @@ pub unsafe extern "C" fn zcashlc_create_account(
         let account = db_data.get_account(account_id)?.expect("just created");
         let account_index = match account.source() {
             AccountSource::Derived { account_index, .. } => account_index,
-            AccountSource::Imported => unreachable!("just created"),
+            AccountSource::Imported { .. } => unreachable!("just created"),
         };
 
         let encoded = usk.to_bytes(Era::Orchard);
@@ -554,6 +577,20 @@ pub unsafe extern "C" fn zcashlc_create_account(
 /// - `1` for `Ok(true)`.
 /// - `0` for `Ok(false)`.
 /// - `-1` for `Err(_)`.
+///
+/// # Safety
+///
+/// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+///   alignment of `1`. Its contents must be a string representing a valid system path in the
+///   operating system's preferred representation.
+/// - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+/// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+/// - `seed` must be non-null and valid for reads for `seed_len` bytes, and it must have an
+///   alignment of `1`.
+/// - The memory referenced by `seed` must not be mutated for the duration of the function call.
+/// - The total size `seed_len` must be no larger than `isize::MAX`. See the safety documentation
+///   of pointer::offset.
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_is_seed_relevant_to_any_derived_account(
     db_data: *const u8,
@@ -611,16 +648,8 @@ pub struct FFIEncodedKeys {
 
 impl FFIEncodedKeys {
     pub fn ptr_from_vec(v: Vec<FFIEncodedKey>) -> *mut Self {
-        // Going from Vec<_> to Box<[_]> just drops the (extra) `capacity`
-        let boxed_slice: Box<[FFIEncodedKey]> = v.into_boxed_slice();
-        let len = boxed_slice.len();
-        let fat_ptr: *mut [FFIEncodedKey] = Box::into_raw(boxed_slice);
-        // It is guaranteed to be possible to obtain a raw pointer to the start
-        // of a slice by casting the pointer-to-slice, as documented e.g. at
-        // <https://doc.rust-lang.org/std/primitive.pointer.html#method.as_mut_ptr>.
-        // TODO: replace with `as_mut_ptr()` when that is stable.
-        let slim_ptr: *mut FFIEncodedKey = fat_ptr as _;
-        Box::into_raw(Box::new(FFIEncodedKeys { ptr: slim_ptr, len }))
+        let (ptr, len) = ptr_from_vec(v);
+        Box::into_raw(Box::new(FFIEncodedKeys { ptr, len }))
     }
 }
 
@@ -634,11 +663,7 @@ impl FFIEncodedKeys {
 pub unsafe extern "C" fn zcashlc_free_keys(ptr: *mut FFIEncodedKeys) {
     if !ptr.is_null() {
         let s: Box<FFIEncodedKeys> = unsafe { Box::from_raw(ptr) };
-
-        let slice: &mut [FFIEncodedKey] = unsafe { slice::from_raw_parts_mut(s.ptr, s.len) };
-        for k in slice.iter_mut() {
-            unsafe { zcashlc_string_free(k.encoding) }
-        }
+        free_ptr_from_vec_with(s.ptr, s.len, |k| unsafe { zcashlc_string_free(k.encoding) });
         drop(s);
     }
 }
@@ -920,10 +945,7 @@ pub unsafe extern "C" fn zcashlc_get_typecodes_for_unified_address_receivers(
 ///   [`zcashlc_get_typecodes_for_unified_address_receivers`].
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_free_typecodes(data: *mut u32, len: usize) {
-    if !data.is_null() {
-        let s = unsafe { Box::from_raw(slice::from_raw_parts_mut(data, len)) };
-        drop(s);
-    }
+    free_ptr_from_vec(data, len);
 }
 
 struct UnifiedAddressParser(UnifiedAddress);
@@ -1016,42 +1038,13 @@ pub unsafe extern "C" fn zcashlc_get_sapling_receiver_for_unified_address(
     unwrap_exc_or_null(res)
 }
 
-/// Returns true when the provided address decodes to a valid Sapling payment address for the
-/// specified network, false in any other case.
-///
-/// # Safety
-///
-/// - `address` must be non-null and must point to a null-terminated UTF-8 string.
-/// - The memory referenced by `address` must not be mutated for the duration of the function call.
-#[no_mangle]
-pub unsafe extern "C" fn zcashlc_is_valid_sapling_address(
-    address: *const c_char,
-    network_id: u32,
-) -> bool {
-    let res = catch_panic(|| {
-        let network = parse_network(network_id)?;
-        let addr = unsafe { CStr::from_ptr(address).to_str()? };
-        Ok(is_valid_sapling_address(addr, &network))
-    });
-    unwrap_exc_or(res, false)
-}
-
-fn is_valid_sapling_address(address: &str, network: &Network) -> bool {
-    match Address::decode(network, address) {
-        Some(addr) => match addr {
-            Address::Sapling(_) => true,
-            Address::Transparent(_) | Address::Unified(_) => false,
-        },
-        None => false,
-    }
-}
-
 enum AddressType {
     Sprout,
     P2pkh,
     P2sh,
     Sapling,
     Unified,
+    Tex,
 }
 
 struct AddressMetadata {
@@ -1115,6 +1108,16 @@ impl TryFromAddress for AddressMetadata {
             addr_type: AddressType::P2sh,
         })
     }
+
+    fn try_from_tex(
+        network: zcash_address::Network,
+        _data: [u8; 20],
+    ) -> Result<Self, ConversionError<Self::Error>> {
+        Ok(AddressMetadata {
+            network,
+            addr_type: AddressType::Tex,
+        })
+    }
 }
 
 /// Returns the network type and address kind for the given address string,
@@ -1125,6 +1128,7 @@ impl TryFromAddress for AddressMetadata {
 /// * p2sh: 1
 /// * sapling: 2
 /// * unified: 3
+/// * tex: 4
 ///
 /// # Safety
 ///
@@ -1157,6 +1161,7 @@ pub unsafe extern "C" fn zcashlc_get_address_metadata(
                 AddressType::P2sh => 1,
                 AddressType::Sapling => 2,
                 AddressType::Unified => 3,
+                AddressType::Tex => 4,
                 AddressType::Sprout => {
                     return Err(anyhow!("Sprout addresses are not supported."));
                 }
@@ -1166,36 +1171,6 @@ pub unsafe extern "C" fn zcashlc_get_address_metadata(
         Ok(true)
     });
     unwrap_exc_or(res, false)
-}
-
-/// Returns true when the address is a valid transparent payment address for the specified network,
-/// false in any other case.
-///
-/// # Safety
-///
-/// - `address` must be non-null and must point to a null-terminated UTF-8 string.
-/// - The memory referenced by `address` must not be mutated for the duration of the function call.
-#[no_mangle]
-pub unsafe extern "C" fn zcashlc_is_valid_transparent_address(
-    address: *const c_char,
-    network_id: u32,
-) -> bool {
-    let res = catch_panic(|| {
-        let network = parse_network(network_id)?;
-        let addr = unsafe { CStr::from_ptr(address).to_str()? };
-        Ok(is_valid_transparent_address(addr, &network))
-    });
-    unwrap_exc_or(res, false)
-}
-
-fn is_valid_transparent_address(address: &str, network: &Network) -> bool {
-    match Address::decode(network, address) {
-        Some(addr) => match addr {
-            Address::Sapling(_) | Address::Unified(_) => false,
-            Address::Transparent(_) => true,
-        },
-        None => false,
-    }
 }
 
 /// Returns true when the provided key decodes to a valid Sapling extended spending key for the
@@ -1267,37 +1242,6 @@ pub unsafe extern "C" fn zcashlc_is_valid_unified_full_viewing_key(
     unwrap_exc_or(res, false)
 }
 
-/// Returns true when the provided key decodes to a valid unified address for the
-/// specified network, false in any other case.
-///
-/// # Safety
-///
-/// - `address` must be non-null and must point to a null-terminated UTF-8 string.
-/// - The memory referenced by `address` must not be mutated for the duration of the
-///   function call.
-#[no_mangle]
-pub unsafe extern "C" fn zcashlc_is_valid_unified_address(
-    address: *const c_char,
-    network_id: u32,
-) -> bool {
-    let res = catch_panic(|| {
-        let network = parse_network(network_id)?;
-        let addr = unsafe { CStr::from_ptr(address).to_str()? };
-        Ok(is_valid_unified_address(addr, &network))
-    });
-    unwrap_exc_or(res, false)
-}
-
-fn is_valid_unified_address(address: &str, network: &Network) -> bool {
-    match Address::decode(network, address) {
-        Some(addr) => match addr {
-            Address::Unified(_) => true,
-            Address::Sapling(_) | Address::Transparent(_) => false,
-        },
-        None => false,
-    }
-}
-
 /// Returns the verified transparent balance for `address`, which ignores utxos that have been
 /// received too recently and are not yet deemed spendable according to `min_confirmations`.
 ///
@@ -1328,15 +1272,15 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance(
         let taddr = TransparentAddress::decode(&network, addr).unwrap();
         let amount = db_data
             .get_target_and_anchor_heights(min_confirmations)
-            .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
-            .and_then(|opt_anchor| {
-                opt_anchor
-                    .map(|(_, a)| a)
-                    .ok_or_else(|| anyhow!("height not available; scan required."))
+            .map_err(|e| anyhow!("Error while fetching target height: {}", e))
+            .and_then(|opt_target| {
+                opt_target
+                    .map(|(target, _)| target)
+                    .ok_or_else(|| anyhow!("Target height not available; scan required."))
             })
-            .and_then(|anchor| {
+            .and_then(|target| {
                 db_data
-                    .get_unspent_transparent_outputs(&taddr, anchor, &[])
+                    .get_spendable_transparent_outputs(&taddr, target, 0)
                     .map_err(|e| {
                         anyhow!("Error while fetching verified transparent balance: {}", e)
                     })
@@ -1374,20 +1318,18 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
 ) -> i64 {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
-        let min_confirmations = NonZeroU32::new(min_confirmations)
-            .ok_or(anyhow!("min_confirmations should be non-zero"))?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let account = account_id_from_ffi(&db_data, account)?;
 
         let amount = db_data
-            .get_target_and_anchor_heights(min_confirmations)
+            .get_target_and_anchor_heights(NonZeroU32::MIN)
             .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
-            .and_then(|opt_anchor| {
-                opt_anchor
-                    .map(|(_, a)| a)
-                    .ok_or_else(|| anyhow!("height not available; scan required."))
+            .and_then(|opt_target| {
+                opt_target
+                    .map(|(target, _)| target)
+                    .ok_or_else(|| anyhow!("Target height not available; scan required."))
             })
-            .and_then(|anchor| {
+            .and_then(|target| {
                 db_data
                     .get_transparent_receivers(account)
                     .map_err(|e| {
@@ -1402,7 +1344,11 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
                             .keys()
                             .map(|taddr| {
                                 db_data
-                                    .get_unspent_transparent_outputs(taddr, anchor, &[])
+                                    .get_spendable_transparent_outputs(
+                                        taddr,
+                                        target,
+                                        min_confirmations,
+                                    )
                                     .map_err(|e| {
                                         anyhow!(
                                             "Error while fetching verified transparent balance: {}",
@@ -1450,15 +1396,15 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance(
         let taddr = TransparentAddress::decode(&network, addr).unwrap();
         let amount = db_data
             .get_target_and_anchor_heights(NonZeroU32::MIN)
-            .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
-            .and_then(|opt_anchor| {
-                opt_anchor
-                    .map(|(target, _)| target) // Include unconfirmed funds.
-                    .ok_or_else(|| anyhow!("height not available; scan required."))
+            .map_err(|e| anyhow!("Error while fetching target height: {}", e))
+            .and_then(|opt_target| {
+                opt_target
+                    .map(|(target, _)| target)
+                    .ok_or_else(|| anyhow!("Target height not available; scan required."))
             })
-            .and_then(|anchor| {
+            .and_then(|target| {
                 db_data
-                    .get_unspent_transparent_outputs(&taddr, anchor, &[])
+                    .get_spendable_transparent_outputs(&taddr, target, 0)
                     .map_err(|e| anyhow!("Error while fetching total transparent balance: {}", e))
             })?
             .iter()
@@ -1560,7 +1506,7 @@ pub unsafe extern "C" fn zcashlc_get_memo(
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
         let txid_bytes = unsafe { slice::from_raw_parts(txid_bytes, 32) };
-        let txid = TxId::read(&txid_bytes[..])?;
+        let txid = TxId::read(txid_bytes)?;
 
         let protocol = parse_protocol(output_pool).ok_or(anyhow!(
             "Shielded protocol not recognized for code: {}",
@@ -1606,7 +1552,7 @@ pub unsafe extern "C" fn zcashlc_get_memo_as_utf8(
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
 
         let txid_bytes = unsafe { slice::from_raw_parts(txid_bytes, 32) };
-        let txid = TxId::read(&txid_bytes[..])?;
+        let txid = TxId::read(txid_bytes)?;
 
         let memo = db_data
             .get_memo(NoteId::new(txid, ShieldedProtocol::Sapling, output_index))
@@ -1816,7 +1762,7 @@ pub unsafe extern "C" fn zcashlc_put_sapling_subtree_roots(
             .map(|r| {
                 let root_hash_bytes =
                     unsafe { slice::from_raw_parts(r.root_hash_ptr, r.root_hash_ptr_len) };
-                let root_hash = sapling::Node::read(root_hash_bytes)?;
+                let root_hash = HashSer::read(root_hash_bytes)?;
 
                 Ok(CommitmentTreeRoot::from_parts(
                     BlockHeight::from_u32(r.completing_block_height),
@@ -1868,7 +1814,7 @@ pub unsafe extern "C" fn zcashlc_put_orchard_subtree_roots(
             .map(|r| {
                 let root_hash_bytes =
                     unsafe { slice::from_raw_parts(r.root_hash_ptr, r.root_hash_ptr_len) };
-                let root_hash = orchard::tree::MerkleHashOrchard::read(root_hash_bytes)?;
+                let root_hash = HashSer::read(root_hash_bytes)?;
 
                 Ok(CommitmentTreeRoot::from_parts(
                     BlockHeight::from_u32(r.completing_block_height),
@@ -2112,7 +2058,7 @@ impl FfiWalletSummary {
         summary: WalletSummary<AccountId>,
     ) -> anyhow::Result<*mut Self> {
         let (account_balances, account_balances_len) = {
-            let account_balances: Box<[FfiAccountBalance]> = summary
+            let account_balances: Vec<FfiAccountBalance> = summary
                 .account_balances()
                 .iter()
                 .map(|(account_id, balance)| {
@@ -2122,7 +2068,7 @@ impl FfiWalletSummary {
                         .source()
                     {
                         AccountSource::Derived { account_index, .. } => account_index,
-                        AccountSource::Imported => {
+                        AccountSource::Imported { .. } => {
                             unreachable!("Imported accounts are unimplemented")
                         }
                     };
@@ -2131,14 +2077,7 @@ impl FfiWalletSummary {
                 })
                 .collect::<Result<_, _>>()?;
 
-            let len = account_balances.len();
-            let fat_ptr: *mut [FfiAccountBalance] = Box::into_raw(account_balances);
-            // It is guaranteed to be possible to obtain a raw pointer to the start
-            // of a slice by casting the pointer-to-slice, as documented e.g. at
-            // <https://doc.rust-lang.org/std/primitive.pointer.html#method.as_mut_ptr>.
-            // TODO: replace with `as_mut_ptr()` when that is stable.
-            let slim_ptr: *mut FfiAccountBalance = fat_ptr as _;
-            (slim_ptr, len)
+            ptr_from_vec(account_balances)
         };
 
         let scan_progress = if let Some(progress) = summary.scan_progress() {
@@ -2220,13 +2159,7 @@ pub unsafe extern "C" fn zcashlc_get_wallet_summary(
 pub unsafe extern "C" fn zcashlc_free_wallet_summary(ptr: *mut FfiWalletSummary) {
     if !ptr.is_null() {
         let summary = unsafe { Box::from_raw(ptr) };
-        if !summary.account_balances.is_null() {
-            let slice = unsafe {
-                slice::from_raw_parts_mut(summary.account_balances, summary.account_balances_len)
-            };
-            let boxed_slice = unsafe { Box::from_raw(slice) };
-            drop(boxed_slice);
-        }
+        free_ptr_from_vec(summary.account_balances, summary.account_balances_len);
         if !summary.scan_progress.is_null() {
             let progress = unsafe { Box::from_raw(summary.scan_progress) };
             drop(progress);
@@ -2267,16 +2200,8 @@ pub struct FfiScanRanges {
 
 impl FfiScanRanges {
     pub fn ptr_from_vec(v: Vec<FfiScanRange>) -> *mut Self {
-        // Going from Vec<_> to Box<[_]> just drops the (extra) `capacity`
-        let boxed_slice: Box<[FfiScanRange]> = v.into_boxed_slice();
-        let len = boxed_slice.len();
-        let fat_ptr: *mut [FfiScanRange] = Box::into_raw(boxed_slice);
-        // It is guaranteed to be possible to obtain a raw pointer to the start
-        // of a slice by casting the pointer-to-slice, as documented e.g. at
-        // <https://doc.rust-lang.org/std/primitive.pointer.html#method.as_mut_ptr>.
-        // TODO: replace with `as_mut_ptr()` when that is stable.
-        let slim_ptr: *mut FfiScanRange = fat_ptr as _;
-        Box::into_raw(Box::new(FfiScanRanges { ptr: slim_ptr, len }))
+        let (ptr, len) = ptr_from_vec(v);
+        Box::into_raw(Box::new(FfiScanRanges { ptr, len }))
     }
 }
 
@@ -2290,9 +2215,7 @@ impl FfiScanRanges {
 pub unsafe extern "C" fn zcashlc_free_scan_ranges(ptr: *mut FfiScanRanges) {
     if !ptr.is_null() {
         let s: Box<FfiScanRanges> = unsafe { Box::from_raw(ptr) };
-        let slice: &mut [FfiScanRange] = unsafe { slice::from_raw_parts_mut(s.ptr, s.len) };
-        let boxed_slice = unsafe { Box::from_raw(slice) };
-        drop(boxed_slice);
+        free_ptr_from_vec(s.ptr, s.len);
         drop(s);
     }
 }
@@ -2506,7 +2429,7 @@ pub unsafe extern "C" fn zcashlc_put_utxo(
                     .map_err(|_| anyhow!("Invalid UTXO value"))?,
                 script_pubkey,
             },
-            BlockHeight::from(height as u32),
+            Some(BlockHeight::from(height as u32)),
         )
         .ok_or_else(|| {
             anyhow!(
@@ -2534,16 +2457,8 @@ pub struct FFIBlocksMeta {
 
 impl FFIBlocksMeta {
     pub fn ptr_from_vec(v: Vec<FFIBlockMeta>) -> *mut Self {
-        // Going from Vec<_> to Box<[_]> just drops the (extra) `capacity`
-        let boxed_slice: Box<[FFIBlockMeta]> = v.into_boxed_slice();
-        let len = boxed_slice.len();
-        let fat_ptr: *mut [FFIBlockMeta] = Box::into_raw(boxed_slice);
-        // It is guaranteed to be possible to obtain a raw pointer to the start
-        // of a slice by casting the pointer-to-slice, as documented e.g. at
-        // <https://doc.rust-lang.org/std/primitive.pointer.html#method.as_mut_ptr>.
-        // TODO: replace with `as_mut_ptr()` when that is stable.
-        let slim_ptr: *mut FFIBlockMeta = fat_ptr as _;
-        Box::into_raw(Box::new(FFIBlocksMeta { ptr: slim_ptr, len }))
+        let (ptr, len) = ptr_from_vec(v);
+        Box::into_raw(Box::new(FFIBlocksMeta { ptr, len }))
     }
 }
 
@@ -2733,7 +2648,7 @@ pub unsafe extern "C" fn zcashlc_decrypt_and_store_transaction(
     db_data_len: usize,
     tx: *const u8,
     tx_len: usize,
-    _mined_height: u32,
+    mined_height: i64,
     network_id: u32,
 ) -> i32 {
     let res = catch_panic(|| {
@@ -2749,7 +2664,24 @@ pub unsafe extern "C" fn zcashlc_decrypt_and_store_transaction(
         //   from their encoding.
         let tx = Transaction::read(tx_bytes, BranchId::Sapling)?;
 
-        match decrypt_and_store_transaction(&network, &mut db_data, &tx) {
+        // Following the conventions of the `zcashd` `getrawtransaction` RPC method,
+        // negative values (specifically -1) indicate that the transaction may have been 
+        // mined, but in a fork of the chain rather than the main chain, whereas a value 
+        // of zero indicates that the transaction is in the mempool. We do not distinguish
+        // between these in `librustzcash`, and so both cases are mapped to `None`,
+        // indicating that the mined height of the transaction is simply unknown.
+        let mined_height = if mined_height > 0 {
+            let h = u32::try_from(mined_height)
+                .map_err(|e| anyhow!("Block height outside valid range: {}", e))?;
+            Some(h.into())
+        } else {
+            // We do not provide a mined height to `decrypt_and_store_transaction` for either
+            // transactions in the mempool or for transactions that have been mined on a fork
+            // but not in the main chain.
+            None
+        };
+
+        match decrypt_and_store_transaction(&network, &mut db_data, &tx, mined_height) {
             Ok(()) => Ok(1),
             Err(e) => Err(anyhow!("Error while decrypting transaction: {}", e)),
         }
@@ -2773,17 +2705,20 @@ fn zip317_helper<DbT>(
     )
 }
 
-/// A struct that contains a pointer to, and length information for, a heap-allocated
-/// boxed slice.
+/// A struct that optionally contains a pointer to, and length information for, a
+/// heap-allocated boxed slice.
+///
+/// This is an FFI representation of `Option<Box<[u8]>>`.
 ///
 /// # Safety
 ///
-/// - `ptr` must be non-null and valid for reads for `len` bytes, and it must have an
-///   alignment of `1`. Its contents must be an encoded Proposal protobuf.
+/// - If `ptr` is non-null, it must be valid for reads for `len` bytes, and it must have
+///   an alignment of `1`.
 /// - The memory referenced by `ptr` must not be mutated for the lifetime of the struct
 ///   (up until [`zcashlc_free_boxed_slice`] is called with it).
 /// - The total size `len` must be no larger than `isize::MAX`. See the safety
 ///   documentation of `pointer::offset`.
+///   - When `ptr` is null, `len` should be zero.
 #[repr(C)]
 pub struct FfiBoxedSlice {
     ptr: *mut u8,
@@ -2791,17 +2726,9 @@ pub struct FfiBoxedSlice {
 }
 
 impl FfiBoxedSlice {
-    fn ptr_from_vec(v: Vec<u8>) -> *mut Self {
-        // Going from Vec<_> to Box<[_]> just drops the (extra) `capacity`
-        let boxed_slice: Box<[u8]> = v.into_boxed_slice();
-        let len = boxed_slice.len();
-        let fat_ptr: *mut [u8] = Box::into_raw(boxed_slice);
-        // It is guaranteed to be possible to obtain a raw pointer to the start
-        // of a slice by casting the pointer-to-slice, as documented e.g. at
-        // <https://doc.rust-lang.org/std/primitive.pointer.html#method.as_mut_ptr>.
-        // TODO: replace with `as_mut_ptr()` when that is stable.
-        let slim_ptr: *mut u8 = fat_ptr as _;
-        Box::into_raw(Box::new(FfiBoxedSlice { ptr: slim_ptr, len }))
+    fn some(v: Vec<u8>) -> *mut Self {
+        let (ptr, len) = ptr_from_vec(v);
+        Box::into_raw(Box::new(FfiBoxedSlice { ptr, len }))
     }
 
     fn none() -> *mut Self {
@@ -2822,11 +2749,7 @@ impl FfiBoxedSlice {
 pub unsafe extern "C" fn zcashlc_free_boxed_slice(ptr: *mut FfiBoxedSlice) {
     if !ptr.is_null() {
         let s: Box<FfiBoxedSlice> = unsafe { Box::from_raw(ptr) };
-        if !s.ptr.is_null() {
-            let slice: Box<[u8]> =
-                unsafe { Box::from_raw(slice::from_raw_parts_mut(s.ptr, s.len)) };
-            drop(slice);
-        }
+        free_ptr_from_vec(s.ptr, s.len);
         drop(s);
     }
 }
@@ -2846,6 +2769,8 @@ pub unsafe extern "C" fn zcashlc_free_boxed_slice(ptr: *mut FfiBoxedSlice) {
 /// - `to` must be non-null and must point to a null-terminated UTF-8 string.
 /// - `memo` must either be null (indicating an empty memo or a transparent recipient) or point to a
 ///    512-byte array.
+/// - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+///   pointer when done using it.
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_propose_transfer(
     db_data: *const u8,
@@ -2869,40 +2794,24 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
         let value = NonNegativeAmount::from_nonnegative_i64(value)
             .map_err(|_| anyhow!("Invalid amount, out of range"))?;
 
-        let to = Address::decode(&network, to)
-            .ok_or_else(|| anyhow!("PaymentAddress is for the wrong network"))?;
+        let to: ZcashAddress = to
+            .parse()
+            .map_err(|e| anyhow!("Can't parse recipient address: {}", e))?;
 
-        let memo = match to {
-            Address::Sapling(_) | Address::Unified(_) => {
-                if memo.is_null() {
-                    Ok(None)
-                } else {
-                    MemoBytes::from_bytes(unsafe { slice::from_raw_parts(memo, 512) })
-                        .map(Some)
-                        .map_err(|e| anyhow!("Invalid MemoBytes: {}", e))
-                }
-            }
-            Address::Transparent(_) => {
-                if memo.is_null() {
-                    Ok(None)
-                } else {
-                    Err(anyhow!(
-                        "Memos are not permitted when sending to transparent recipients."
-                    ))
-                }
-            }
+        let memo = if memo.is_null() {
+            Ok(None)
+        } else {
+            MemoBytes::from_bytes(unsafe { slice::from_raw_parts(memo, 512) })
+                .map(Some)
+                .map_err(|e| anyhow!("Invalid MemoBytes: {}", e))
         }?;
 
         let input_selector = zip317_helper(None, use_zip317_fees);
 
-        let req = TransactionRequest::new(vec![Payment {
-            recipient_address: to,
-            amount: value,
-            memo,
-            label: None,
-            message: None,
-            other_params: vec![],
-        }])
+        let req = TransactionRequest::new(vec![Payment::new(to, value, memo, None, None, vec![])
+            .ok_or_else(|| {
+                anyhow!("Memos are not permitted when sending to transparent recipients.")
+            })?])
         .map_err(|e| anyhow!("Error creating transaction request: {:?}", e))?;
 
         let proposal = propose_transfer::<_, _, _, Infallible>(
@@ -2915,9 +2824,9 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
         )
         .map_err(|e| anyhow!("Error while sending funds: {}", e))?;
 
-        let encoded = Proposal::from_standard_proposal(&network, &proposal).encode_to_vec();
+        let encoded = Proposal::from_standard_proposal(&proposal).encode_to_vec();
 
-        Ok(FfiBoxedSlice::ptr_from_vec(encoded))
+        Ok(FfiBoxedSlice::some(encoded))
     });
     unwrap_exc_or_null(res)
 }
@@ -2937,7 +2846,9 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
 /// - `payment_uri` must be non-null and must point to a null-terminated UTF-8 string.
 /// - `network_id` a u32. 0 for Testnet and 1 for Mainnet
 /// - `min_confirmations` number of confirmations of the funds to spend
-/// - `use_zip317_fees` `true`` to use ZIP-317 fees.
+/// - `use_zip317_fees` `true` to use ZIP-317 fees.
+/// - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+///   pointer when done using it.
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_propose_transfer_from_uri(
     db_data: *const u8,
@@ -2959,7 +2870,7 @@ pub unsafe extern "C" fn zcashlc_propose_transfer_from_uri(
 
         let input_selector = zip317_helper(None, use_zip317_fees);
 
-        let req = TransactionRequest::from_uri(&network, payment_uri_str)
+        let req = TransactionRequest::from_uri(payment_uri_str)
             .map_err(|e| anyhow!("Error creating transaction request: {:?}", e))?;
 
         let proposal = propose_transfer::<_, _, _, Infallible>(
@@ -2972,9 +2883,9 @@ pub unsafe extern "C" fn zcashlc_propose_transfer_from_uri(
         )
         .map_err(|e| anyhow!("Error while sending funds: {}", e))?;
 
-        let encoded = Proposal::from_standard_proposal(&network, &proposal).encode_to_vec();
+        let encoded = Proposal::from_standard_proposal(&proposal).encode_to_vec();
 
-        Ok(FfiBoxedSlice::ptr_from_vec(encoded))
+        Ok(FfiBoxedSlice::some(encoded))
     });
     unwrap_exc_or_null(res)
 }
@@ -3017,6 +2928,8 @@ pub unsafe extern "C" fn zcashlc_string_free(s: *mut c_char) {
 /// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
 ///   documentation of pointer::offset.
 /// - `shielding_threshold` a non-negative shielding threshold amount in zatoshi
+/// - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+///   pointer when done using it.
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_propose_shielding(
     db_data: *const u8,
@@ -3054,7 +2967,7 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
             ) {
                 None => Err(anyhow!("Transparent receiver is for the wrong network")),
                 Some(addr) => match addr {
-                    Address::Sapling(_) | Address::Unified(_) => {
+                    Address::Sapling(_) | Address::Unified(_) | Address::Tex(_) => {
                         Err(anyhow!("Transparent receiver is not a transparent address"))
                     }
                     Address::Transparent(addr) => {
@@ -3100,7 +3013,7 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
                 Ok(account_receivers.iter().next().map(|(a, v)| (*a, *v)))
             },
             |addr| Ok(account_receivers.get(&addr).map(|value| (addr, *value)))
-        )?.filter(|(_, value)| *value >= shielding_threshold.into()) {
+        )?.filter(|(_, value)| *value >= shielding_threshold) {
             [addr]
         } else {
             // There are no transparent funds to shield; don't create a proposal.
@@ -3119,9 +3032,9 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
         )
         .map_err(|e| anyhow!("Error while shielding transaction: {}", e))?;
 
-        let encoded = Proposal::from_standard_proposal(&network, &proposal).encode_to_vec();
+        let encoded = Proposal::from_standard_proposal(&proposal).encode_to_vec();
 
-        Ok(FfiBoxedSlice::ptr_from_vec(encoded))
+        Ok(FfiBoxedSlice::some(encoded))
     });
     unwrap_exc_or_null(res)
 }
@@ -3149,16 +3062,8 @@ pub struct FfiTxIds {
 
 impl FfiTxIds {
     pub fn ptr_from_vec(v: Vec<[u8; 32]>) -> *mut Self {
-        // Going from Vec<_> to Box<[_]> just drops the (extra) `capacity`
-        let boxed_slice: Box<[[u8; 32]]> = v.into_boxed_slice();
-        let len = boxed_slice.len();
-        let fat_ptr: *mut [[u8; 32]] = Box::into_raw(boxed_slice);
-        // It is guaranteed to be possible to obtain a raw pointer to the start
-        // of a slice by casting the pointer-to-slice, as documented e.g. at
-        // <https://doc.rust-lang.org/std/primitive.pointer.html#method.as_mut_ptr>.
-        // TODO: replace with `as_mut_ptr()` when that is stable.
-        let slim_ptr: *mut [u8; 32] = fat_ptr as _;
-        Box::into_raw(Box::new(FfiTxIds { ptr: slim_ptr, len }))
+        let (ptr, len) = ptr_from_vec(v);
+        Box::into_raw(Box::new(FfiTxIds { ptr, len }))
     }
 }
 
@@ -3172,9 +3077,7 @@ impl FfiTxIds {
 pub unsafe extern "C" fn zcashlc_free_txids(ptr: *mut FfiTxIds) {
     if !ptr.is_null() {
         let s: Box<FfiTxIds> = unsafe { Box::from_raw(ptr) };
-        let slice: &mut [[u8; 32]] = unsafe { slice::from_raw_parts_mut(s.ptr, s.len) };
-        let boxed_slice = unsafe { Box::from_raw(slice) };
-        drop(boxed_slice);
+        free_ptr_from_vec(s.ptr, s.len);
         drop(s);
     }
 }
@@ -3248,7 +3151,7 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transactions(
         let proposal =
             Proposal::decode(unsafe { slice::from_raw_parts(proposal_ptr, proposal_len) })
                 .map_err(|e| anyhow!("Invalid proposal: {}", e))?
-                .try_into_standard_proposal(&network, &db_data)?;
+                .try_into_standard_proposal(&db_data)?;
         let usk = unsafe { decode_usk(usk_ptr, usk_len) }?;
         let spend_params = Path::new(OsStr::from_bytes(unsafe {
             slice::from_raw_parts(spend_params, spend_params_len)
@@ -3277,6 +3180,324 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transactions(
     unwrap_exc_or_null(res)
 }
 
+/// Metadata about the status of a transaction obtained by inspecting the chain state.
+#[repr(C, u8)]
+pub enum FfiTransactionStatus {
+    /// The requested transaction ID was not recognized by the node.
+    TxidNotRecognized,
+    /// The requested transaction ID corresponds to a transaction that is recognized by the node,
+    /// but is in the mempool or is otherwise not mined in the main chain (but may have been mined
+    /// on a fork that was reorged away).
+    NotInMainChain,
+    /// The requested transaction ID corresponds to a transaction that has been included in the
+    /// block at the provided height.
+    Mined(u32),
+}
+
+/// Sets the transaction status to the provided value.
+///
+/// # Safety
+///
+/// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must
+///   have an alignment of `1`. Its contents must be a string representing a valid system
+///   path in the operating system's preferred representation.
+/// - The memory referenced by `db_data` must not be mutated for the duration of the
+///   function call.
+/// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+/// - `txid_bytes` must be non-null and valid for reads for `db_data_len` bytes, and it must have
+///   an alignment of `1`.
+/// - The memory referenced by `txid_bytes_len` must not be mutated for the duration of the
+///   function call.
+/// - The total size `txid_bytes_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_set_transaction_status(
+    db_data: *const u8,
+    db_data_len: usize,
+    network_id: u32,
+    txid_bytes: *const u8,
+    txid_bytes_len: usize,
+    status: FfiTransactionStatus,
+) {
+    let res = catch_panic(|| {
+        let network = parse_network(network_id)?;
+        let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
+
+        let txid_bytes = unsafe { slice::from_raw_parts(txid_bytes, txid_bytes_len) };
+        let txid = TxId::read(&txid_bytes[..])?;
+
+        let status = match status {
+            FfiTransactionStatus::TxidNotRecognized => TransactionStatus::TxidNotRecognized,
+            FfiTransactionStatus::NotInMainChain => TransactionStatus::NotInMainChain,
+            FfiTransactionStatus::Mined(h) => TransactionStatus::Mined(BlockHeight::from(h)),
+        };
+
+        db_data
+            .set_transaction_status(txid, status)
+            .map_err(|e| anyhow!("Error setting transaction status for txid {}: {}", txid, e))
+    });
+
+    unwrap_exc_or(res, ())
+}
+
+/// A request for transaction data enhancement, spentness check, or discovery
+/// of spends from a given transparent address within a specific block range.
+#[repr(C, u8)]
+pub enum FfiTransactionDataRequest {
+    /// Information about the chain's view of a transaction is requested.
+    ///
+    /// The caller evaluating this request on behalf of the wallet backend should respond to this
+    /// request by determining the status of the specified transaction with respect to the main
+    /// chain; if using `lightwalletd` for access to chain data, this may be obtained by
+    /// interpreting the results of the [`GetTransaction`] RPC method. It should then call
+    /// [`WalletWrite::set_transaction_status`] to provide the resulting transaction status
+    /// information to the wallet backend.
+    ///
+    /// [`GetTransaction`]: crate::proto::service::compact_tx_streamer_client::CompactTxStreamerClient::get_transaction
+    GetStatus([u8; 32]),
+    /// Transaction enhancement (download of complete raw transaction data) is requested.
+    ///
+    /// The caller evaluating this request on behalf of the wallet backend should respond to this
+    /// request by providing complete data for the specified transaction to
+    /// [`wallet::decrypt_and_store_transaction`]; if using `lightwalletd` for access to chain
+    /// state, this may be obtained via the [`GetTransaction`] RPC method. If no data is available
+    /// for the specified transaction, this should be reported to the backend using
+    /// [`WalletWrite::set_transaction_status`]. A [`TransactionDataRequest::Enhancement`] request
+    /// subsumes any previously existing [`TransactionDataRequest::GetStatus`] request.
+    ///
+    /// [`GetTransaction`]: crate::proto::service::compact_tx_streamer_client::CompactTxStreamerClient::get_transaction
+    Enhancement([u8; 32]),
+    /// Information about transactions that receive or spend funds belonging to the specified
+    /// transparent address is requested.
+    ///
+    /// Fully transparent transactions, and transactions that do not contain either shielded inputs
+    /// or shielded outputs belonging to the wallet, may not be discovered by the process of chain
+    /// scanning; as a consequence, the wallet must actively query to find transactions that spend
+    /// such funds. Ideally we'd be able to query by [`OutPoint`] but this is not currently
+    /// functionality that is supported by the light wallet server.
+    ///
+    /// The caller evaluating this request on behalf of the wallet backend should respond to this
+    /// request by detecting transactions involving the specified address within the provided block
+    /// range; if using `lightwalletd` for access to chain data, this may be performed using the
+    /// [`GetTaddressTxids`] RPC method. It should then call [`wallet::decrypt_and_store_transaction`]
+    /// for each transaction so detected.
+    ///
+    /// [`GetTaddressTxids`]: crate::proto::service::compact_tx_streamer_client::CompactTxStreamerClient::get_taddress_txids
+    SpendsFromAddress {
+        address: *mut c_char,
+        block_range_start: u32,
+        /// An optional end height; no end height is represented as `-1`
+        block_range_end: i64,
+    },
+}
+
+/// A struct that contains a pointer to, and length information for, a heap-allocated
+/// slice of [`FfiTransactionDataRequest`] values.
+///
+/// # Safety
+///
+/// - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiTransactionDataRequest>()`
+///   many bytes, and it must be properly aligned. This means in particular:
+///   - The entire memory range pointed to by `ptr` must be contained within a single allocated
+///     object. Slices can never span across multiple allocated objects.
+///   - `ptr` must be non-null and aligned even for zero-length slices.
+///   - `ptr` must point to `len` consecutive properly initialized values of type
+///     [`FfiTransactionDataRequest`].
+/// - The total size `len * mem::size_of::<FfiTransactionDataRequest>()` of the slice pointed to
+///   by `ptr` must be no larger than isize::MAX. See the safety documentation of pointer::offset.
+/// - See the safety documentation of [`FfiTransactionDataRequest`]
+#[repr(C)]
+pub struct FfiTransactionDataRequests {
+    ptr: *mut FfiTransactionDataRequest,
+    len: usize, // number of elems
+}
+
+impl FfiTransactionDataRequests {
+    pub fn ptr_from_vec(v: Vec<FfiTransactionDataRequest>) -> *mut Self {
+        let (ptr, len) = ptr_from_vec(v);
+        Box::into_raw(Box::new(FfiTransactionDataRequests { ptr, len }))
+    }
+}
+
+/// Frees an array of FfiTransactionDataRequest values as allocated by `zcashlc_transaction_data_requests`.
+///
+/// # Safety
+///
+/// - `ptr` if `ptr` is non-null it must point to a struct having the layout of [`FfiTransactionDataRequests`].
+///   See the safety documentation of [`FfiTransactionDataRequests`].
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_free_transaction_data_requests(
+    ptr: *mut FfiTransactionDataRequests,
+) {
+    if !ptr.is_null() {
+        let s: Box<FfiTransactionDataRequests> = unsafe { Box::from_raw(ptr) };
+        free_ptr_from_vec_with(s.ptr, s.len, |req| match req {
+            FfiTransactionDataRequest::SpendsFromAddress { address, .. } => unsafe {
+                zcashlc_string_free(*address)
+            },
+            _ => (),
+        });
+        drop(s);
+    }
+}
+
+/// Returns a list of transaction data requests that the network client should satisfy.
+///
+/// # Safety
+///
+/// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+///   alignment of `1`. Its contents must be a string representing a valid system path in the
+///   operating system's preferred representation.
+/// - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+/// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+/// - Call [`zcashlc_free_transaction_data_requests`] to free the memory associated with the
+///   returned pointer when done using it.
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_transaction_data_requests(
+    db_data: *const u8,
+    db_data_len: usize,
+    network_id: u32,
+) -> *mut FfiTransactionDataRequests {
+    let res = catch_panic(|| {
+        let network = parse_network(network_id)?;
+        let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
+
+        Ok(FfiTransactionDataRequests::ptr_from_vec(
+            db_data
+                .transaction_data_requests()?
+                .into_iter()
+                .map(|req| match req {
+                    TransactionDataRequest::GetStatus(txid) => {
+                        FfiTransactionDataRequest::GetStatus(txid.into())
+                    }
+                    TransactionDataRequest::Enhancement(txid) => {
+                        FfiTransactionDataRequest::Enhancement(txid.into())
+                    }
+                    TransactionDataRequest::SpendsFromAddress {
+                        address,
+                        block_range_start,
+                        block_range_end,
+                    } => FfiTransactionDataRequest::SpendsFromAddress {
+                        address: CString::new(address.encode(&network)).unwrap().into_raw(),
+                        block_range_start: block_range_start.into(),
+                        block_range_end: block_range_end.map_or(-1, |h| u32::from(h).into()),
+                    },
+                })
+                .collect(),
+        ))
+    });
+    unwrap_exc_or_null(res)
+}
+
+//
+// Tor support
+//
+
+/// Creates a Tor runtime.
+///
+/// # Safety
+///
+/// - `tor_dir` must be non-null and valid for reads for `tor_dir_len` bytes, and it must
+///   have an alignment of `1`. Its contents must be a string representing a valid system
+///   path in the operating system's preferred representation.
+/// - The memory referenced by `tor_dir` must not be mutated for the duration of the
+///   function call.
+/// - The total size `tor_dir_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+/// - Call [`zcashlc_free_tor_runtime`] to free the memory associated with the returned
+///   pointer when done using it.
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_create_tor_runtime(
+    tor_dir: *const u8,
+    tor_dir_len: usize,
+) -> *mut TorRuntime {
+    let res = catch_panic(|| {
+        let tor_dir = Path::new(OsStr::from_bytes(unsafe {
+            slice::from_raw_parts(tor_dir, tor_dir_len)
+        }));
+
+        let tor = crate::tor::TorRuntime::create(tor_dir)?;
+
+        Ok(Box::into_raw(Box::new(tor)))
+    });
+    unwrap_exc_or_null(res)
+}
+
+/// Frees a Tor runtime.
+///
+/// # Safety
+///
+/// - If `ptr` is non-null, it must point to a struct having the layout of [`TorRuntime`].
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_free_tor_runtime(ptr: *mut TorRuntime) {
+    if !ptr.is_null() {
+        let s: Box<TorRuntime> = unsafe { Box::from_raw(ptr) };
+        drop(s);
+    }
+}
+
+/// A decimal suitable for converting into an `NSDecimalNumber`.
+#[repr(C)]
+pub struct Decimal {
+    mantissa: u64,
+    exponent: i16,
+    is_sign_negative: bool,
+}
+
+impl Decimal {
+    fn from_rust(d: rust_decimal::Decimal) -> Option<Self> {
+        d.mantissa().abs().try_into().ok().map(|mantissa| Self {
+            mantissa,
+            exponent: -(d.scale() as i16),
+            is_sign_negative: d.is_sign_negative(),
+        })
+    }
+}
+
+/// Fetches the current ZEC-USD exchange rate over Tor.
+///
+/// The result is a [`Decimal`] struct containing the fields necessary to construct an
+/// [`NSDecimalNumber`](https://developer.apple.com/documentation/foundation/nsdecimalnumber/1416003-init).
+///
+/// Returns a negative value on error.
+///
+/// # Safety
+///
+/// - `tor_runtime` must be non-null and point to a struct having the layout of
+///   [`TorRuntime`].
+/// - `tor_runtime` must not be passed to two FFI calls at the same time.
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_get_exchange_rate_usd(tor_runtime: *mut TorRuntime) -> Decimal {
+    // SAFETY: We ensure unwind safety by:
+    // - using `*mut TorRuntime` and respecting mutability rules on the Swift side, to
+    //   avoid observing the effects of a panic in another thread.
+    // - discarding the `TorRuntime` whenever we get an error that is due to a panic.
+    let tor_runtime = AssertUnwindSafe(tor_runtime);
+
+    let res = catch_panic(|| {
+        let tor_runtime =
+            unsafe { tor_runtime.as_mut() }.ok_or_else(|| anyhow!("A Tor runtime is required"))?;
+
+        let exchanges = cryptex::Exchanges::unauthenticated_known_with_gemini_trusted();
+
+        let rate = tor_runtime.runtime().block_on(async {
+            tor_runtime
+                .client()
+                .get_latest_zec_to_usd_rate(&exchanges)
+                .await
+        })?;
+
+        Decimal::from_rust(rate)
+            .ok_or_else(|| anyhow!("Exchange rate has too many significant figures: {}", rate))
+    });
+    unwrap_exc_or(
+        res,
+        Decimal::from_rust(rust_decimal::Decimal::NEGATIVE_ONE).expect("fits"),
+    )
+}
+
 //
 // Utility functions
 //
@@ -3286,5 +3507,52 @@ fn parse_network(value: u32) -> anyhow::Result<Network> {
         0 => Ok(TestNetwork),
         1 => Ok(MainNetwork),
         _ => Err(anyhow!("Invalid network type: {}. Expected either 0 or 1 for Testnet or Mainnet, respectively.", value))
+    }
+}
+
+/// Converts the given vector into a raw pointer and length.
+///
+/// # Safety
+///
+/// The memory associated with the returned pointer must be freed with an appropriate
+/// method ([`free_ptr_from_vec`] or [`free_ptr_from_vec_with`]).
+fn ptr_from_vec<T>(v: Vec<T>) -> (*mut T, usize) {
+    // Going from Vec<_> to Box<[_]> drops the (extra) `capacity`, subject to memory
+    // fitting <https://doc.rust-lang.org/nightly/std/alloc/trait.Allocator.html#memory-fitting>.
+    // However, the guarantee for this was reverted in 1.77.0; we need to keep an eye on
+    // <https://github.com/rust-lang/rust/issues/125941>.
+    let boxed_slice: Box<[T]> = v.into_boxed_slice();
+    let len = boxed_slice.len();
+    let fat_ptr: *mut [T] = Box::into_raw(boxed_slice);
+    // It is guaranteed to be possible to obtain a raw pointer to the start
+    // of a slice by casting the pointer-to-slice, as documented e.g. at
+    // <https://doc.rust-lang.org/std/primitive.pointer.html#method.as_mut_ptr>.
+    // TODO: replace with `as_mut_ptr()` when that is stable.
+    let slim_ptr: *mut T = fat_ptr as _;
+    (slim_ptr, len)
+}
+
+/// Frees vectors that had been converted into raw pointers.
+///
+/// # Safety
+///
+/// - `ptr` and `len` must have been returned from the same call to `ptr_from_vec`.
+fn free_ptr_from_vec<T>(ptr: *mut T, len: usize) {
+    free_ptr_from_vec_with(ptr, len, |_| ());
+}
+
+/// Frees vectors that had been converted into raw pointers, the elements of which
+/// themselves contain raw pointers that need freeing.
+///
+/// # Safety
+///
+/// - `ptr` and `len` must have been returned from the same call to `ptr_from_vec`.
+fn free_ptr_from_vec_with<T>(ptr: *mut T, len: usize, f: impl Fn(&mut T)) {
+    if !ptr.is_null() {
+        let mut s = unsafe { Box::from_raw(slice::from_raw_parts_mut(ptr, len)) };
+        for k in s.iter_mut() {
+            f(k);
+        }
+        drop(s);
     }
 }

@@ -16,11 +16,11 @@ build = "build.rs"
 # Zcash
 orchard = "0.9"
 sapling = { package = "sapling-crypto", version = "0.2", default-features = false }
-zcash_address = { version = "0.4" }
+zcash_address = { version = "0.5" }
 zcash_client_backend = { version = "0.13", features = ["orchard", "tor", "transparent-inputs", "unstable"] }
-zcash_client_sqlite = { version = "0.11.1", features = ["orchard", "transparent-inputs", "unstable"] }
-zcash_primitives = "0.16"
-zcash_proofs = "0.16"
+zcash_client_sqlite = { version = "0.11.2", features = ["orchard", "transparent-inputs", "unstable"] }
+zcash_primitives = "0.17"
+zcash_proofs = "0.17"
 
 # Infrastructure
 prost = "0.13"
@@ -60,3 +60,14 @@ crate-type = ["staticlib"]
 
 [profile.release]
 lto = true
+
+[patch.crates-io]
+sapling-crypto = { git = "https://github.com/zcash/sapling-crypto", rev = "b1ad3694ee13a2fc5d291ad04721a6252da0993c" }
+orchard = { git = "https://github.com/zcash/orchard", rev = "55fb089a335bbbc1cda186c706bc037073df8eb7" }
+incrementalmerkletree = { git = "https://github.com/zcash/incrementalmerkletree", rev = "ffe4234788fd22662b937ba7c6ea01535fcc1293" }
+shardtree = { git = "https://github.com/zcash/incrementalmerkletree", rev = "ffe4234788fd22662b937ba7c6ea01535fcc1293" }
+zcash_address = { git = "https://github.com/zcash/librustzcash", rev = "467552e9e111fd70b491b15156cd9c1f23ca7269" }
+zcash_client_backend = { git = "https://github.com/zcash/librustzcash", rev = "467552e9e111fd70b491b15156cd9c1f23ca7269" }
+zcash_client_sqlite = { git = "https://github.com/zcash/librustzcash", rev = "467552e9e111fd70b491b15156cd9c1f23ca7269" }
+zcash_primitives = { git = "https://github.com/zcash/librustzcash", rev = "467552e9e111fd70b491b15156cd9c1f23ca7269" }
+zcash_proofs = { git = "https://github.com/zcash/librustzcash", rev = "467552e9e111fd70b491b15156cd9c1f23ca7269" }

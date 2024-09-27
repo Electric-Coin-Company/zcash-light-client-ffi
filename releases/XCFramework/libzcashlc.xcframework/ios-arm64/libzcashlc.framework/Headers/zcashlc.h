@@ -1008,8 +1008,17 @@ bool zcashlc_seed_fingerprint(const uint8_t *seed,
                               uint8_t *signature_bytes_ret);
 
 /**
- * Returns the most recent block height to which it is possible to reset the state
- * of the data database.
+ * Rewinds the data database to at most the given height.
+ *
+ * If the requested height is greater than or equal to the height of the last scanned block, this
+ * function does nothing.
+ *
+ * This procedure returns the height to which the database was actually rewound, or `-1` if no
+ * rewind was performed.
+ *
+ * If the requested rewind could not be performed, but a rewind to a different (greater) height
+ * would be valid, the `safe_rewind_ret` output parameter will be set to that value on completion;
+ * otherwise, it will remain unmodified.
  *
  * # Safety
  *
@@ -1020,30 +1029,11 @@ bool zcashlc_seed_fingerprint(const uint8_t *seed,
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  */
-int32_t zcashlc_get_nearest_rewind_height(const uint8_t *db_data,
-                                          uintptr_t db_data_len,
-                                          int32_t height,
-                                          uint32_t network_id);
-
-/**
- * Rewinds the data database to the given height.
- *
- * If the requested height is greater than or equal to the height of the last scanned
- * block, this function does nothing.
- *
- * # Safety
- *
- * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
- *   alignment of `1`. Its contents must be a string representing a valid system path in the
- *   operating system's preferred representation.
- * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
- * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
- *   documentation of pointer::offset.
- */
-bool zcashlc_rewind_to_height(const uint8_t *db_data,
-                              uintptr_t db_data_len,
-                              int32_t height,
-                              uint32_t network_id);
+int64_t zcashlc_rewind_to_height(const uint8_t *db_data,
+                                 uintptr_t db_data_len,
+                                 uint32_t height,
+                                 uint32_t network_id,
+                                 uint32_t *safe_rewind_ret);
 
 /**
  * Adds a sequence of Sapling subtree roots to the data store.

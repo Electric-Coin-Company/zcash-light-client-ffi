@@ -1011,17 +1011,18 @@ bool zcashlc_seed_fingerprint(const uint8_t *seed,
  * Rewinds the data database to at most the given height.
  *
  * If the requested height is greater than or equal to the height of the last scanned block, this
- * function does nothing.
+ * function sets the `safe_rewind_ret` output parameter to `-1` and does nothing else.
  *
  * This procedure returns the height to which the database was actually rewound, or `-1` if no
  * rewind was performed.
  *
  * If the requested rewind could not be performed, but a rewind to a different (greater) height
  * would be valid, the `safe_rewind_ret` output parameter will be set to that value on completion;
- * otherwise, it will remain unmodified.
+ * otherwise, it will be set to `-1`.
  *
  * # Safety
  *
+ * - `safe_rewind_ret` must be non-null, aligned, and valid for writing a `uint32_t`.
  * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
  *   alignment of `1`. Its contents must be a string representing a valid system path in the
  *   operating system's preferred representation.
@@ -1033,7 +1034,7 @@ int64_t zcashlc_rewind_to_height(const uint8_t *db_data,
                                  uintptr_t db_data_len,
                                  uint32_t height,
                                  uint32_t network_id,
-                                 uint32_t *safe_rewind_ret);
+                                 int64_t *safe_rewind_ret);
 
 /**
  * Adds a sequence of Sapling subtree roots to the data store.

@@ -862,29 +862,47 @@ pub unsafe extern "C" fn zcashlc_list_transparent_receivers(
     db_data_len: usize,
     account_id: i32,
     network_id: u32,
+    include_ephemeral: bool,
 ) -> *mut FFIEncodedKeys {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let account = account_id_from_ffi(&db_data, account_id)?;
 
-        match db_data.get_transparent_receivers(account) {
-            Ok(receivers) => {
-                let keys = receivers
-                    .keys()
-                    .map(|receiver| {
-                        let address_str = receiver.encode(&network);
-                        FFIEncodedKey {
-                            account_id: account_id as u32,
-                            encoding: CString::new(address_str).unwrap().into_raw(),
-                        }
-                    })
-                    .collect::<Vec<_>>();
-
-                Ok(FFIEncodedKeys::ptr_from_vec(keys))
+        let external_receivers = db_data
+            .get_transparent_receivers(account)
+            .map_err(|e| anyhow!("Error while fetching transparent receivers: {}", e))?;
+        let keys = external_receivers.keys().map(|receiver| {
+            let address_str = receiver.encode(&network);
+            FFIEncodedKey {
+                account_id: account_id as u32,
+                encoding: CString::new(address_str).unwrap().into_raw(),
             }
-            Err(e) => Err(anyhow!("Error while fetching transparent receivers: {}", e)),
-        }
+        });
+
+        let keys = if include_ephemeral {
+            let ephemeral_keys = db_data
+                .get_known_ephemeral_addresses(account, None)
+                .map_err(|e| {
+                    anyhow!(
+                        "Error while fetching ephemeral transparent receivers: {}",
+                        e
+                    )
+                })?;
+
+            keys.chain(ephemeral_keys.iter().map(|(addr, _)| {
+                let address_str = addr.encode(&network);
+                FFIEncodedKey {
+                    account_id: account_id as u32,
+                    encoding: CString::new(address_str).unwrap().into_raw(),
+                }
+            }))
+            .collect::<Vec<_>>()
+        } else {
+            keys.collect::<Vec<_>>()
+        };
+
+        Ok(FFIEncodedKeys::ptr_from_vec(keys))
     });
     unwrap_exc_or_null(res)
 }

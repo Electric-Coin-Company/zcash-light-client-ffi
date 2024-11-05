@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Create, or merge into, the corresponding preview branch
-        run: git switch -c '${{ github.ref_name }}-preview' || git switch -m '${{ github.ref_name }}-preview'
+        run: git switch -c 'preview/${{ github.ref_name }}' || git switch -m 'preview/${{ github.ref_name }}'
 
       # https://github.com/actions/runner-images/blob/main/images/macos/macos-12-Readme.md#xcode
       - name: Select the required Xcode version

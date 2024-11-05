@@ -3,8 +3,8 @@ name: Binary preview
 on:
   push:
     branches:
-      - 'ffi-**'
-      - 'hotfix-**'
+      - 'release/**'
+      - 'hotfix/**'
 
 jobs:
   build:

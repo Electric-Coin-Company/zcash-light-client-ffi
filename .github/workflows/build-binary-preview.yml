@@ -1,0 +1,30 @@
+name: Binary preview
+
+on:
+  push:
+    branches:
+      - 'release/**'
+      - 'hotfix/**'
+
+jobs:
+  build:
+    name: Build
+    runs-on: macos-12
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create, or merge into, the corresponding preview branch
+        run: git switch -c '${{ github.ref_name }}-preview' || git switch -m '${{ github.ref_name }}-preview'
+
+      # https://github.com/actions/runner-images/blob/main/images/macos/macos-12-Readme.md#xcode
+      - name: Select the required Xcode version
+        run: sudo xcode-select -s '/Applications/Xcode_13.4.1.app/Contents/Developer'
+
+      - name: Build the binaries
+        run: make xcframework
+
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: 'make xcframework'

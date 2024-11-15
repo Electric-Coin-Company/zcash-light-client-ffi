@@ -653,7 +653,7 @@ int8_t zcashlc_is_seed_relevant_to_any_derived_account(const uint8_t *db_data,
                                                        uint32_t network_id);
 
 /**
- * Frees an array of FFIEncodedKeys values as allocated by `zcashlc_derive_unified_viewing_keys_from_seed`
+ * Frees an array of `FFIEncodedKeys` values as allocated by `zcashlc_list_transparent_receivers`.
  *
  * # Safety
  *
@@ -661,46 +661,6 @@ int8_t zcashlc_is_seed_relevant_to_any_derived_account(const uint8_t *db_data,
  *   See the safety documentation of [`FFIEncodedKeys`].
  */
 void zcashlc_free_keys(struct FFIEncodedKeys *ptr);
-
-/**
- * Derives and returns a unified spending key from the given seed for the given account ID.
- *
- * Returns the binary encoding of the spending key. The caller should manage the memory of (and
- * store, if necessary) the returned spending key in a secure fashion.
- *
- * # Safety
- *
- * - `seed` must be non-null and valid for reads for `seed_len` bytes, and it must have an
- *   alignment of `1`.
- * - The memory referenced by `seed` must not be mutated for the duration of the function call.
- * - The total size `seed_len` must be no larger than `isize::MAX`. See the safety documentation
- *   of pointer::offset.
- * - Call `zcashlc_free_binary_key` to free the memory associated with the returned pointer when
- *   you are finished using it.
- */
-struct FFIBinaryKey *zcashlc_derive_spending_key(const uint8_t *seed,
-                                                 uintptr_t seed_len,
-                                                 int32_t account,
-                                                 uint32_t network_id);
-
-/**
- * Obtains the unified full viewing key for the given binary-encoded unified spending key
- * and returns the resulting encoded UFVK string. `usk_ptr` should point to an array of `usk_len`
- * bytes containing a unified spending key encoded as returned from the `zcashlc_create_account`
- * or `zcashlc_derive_spending_key` functions.
- *
- * # Safety
- *
- * - `usk_ptr` must be non-null and must point to an array of `usk_len` bytes.
- * - The memory referenced by `usk_ptr` must not be mutated for the duration of the function call.
- * - The total size `usk_len` must be no larger than `isize::MAX`. See the safety documentation
- *   of pointer::offset.
- * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
- *   when you are done using it.
- */
-char *zcashlc_spending_key_to_full_viewing_key(const uint8_t *usk_ptr,
-                                               uintptr_t usk_len,
-                                               uint32_t network_id);
 
 /**
  * Returns the most-recently-generated unified payment address for the specified account.
@@ -760,112 +720,6 @@ struct FFIEncodedKeys *zcashlc_list_transparent_receivers(const uint8_t *db_data
                                                           uintptr_t db_data_len,
                                                           int32_t account_id,
                                                           uint32_t network_id);
-
-/**
- * Extracts the typecodes of the receivers within the given Unified Address.
- *
- * Returns a pointer to a slice of typecodes. `len_ret` is set to the length of the
- * slice.
- *
- * See the following sections of ZIP 316 for details on how to interpret typecodes:
- * - [List of known typecodes](https://zips.z.cash/zip-0316#encoding-of-unified-addresses)
- * - [Adding new types](https://zips.z.cash/zip-0316#adding-new-types)
- * - [Metadata Items](https://zips.z.cash/zip-0316#metadata-items)
- *
- * # Safety
- *
- * - `ua` must be non-null and must point to a null-terminated UTF-8 string containing an
- *   encoded Unified Address.
- * - Call [`zcashlc_free_typecodes`] to free the memory associated with the returned
- *   pointer when done using it.
- */
-uint32_t *zcashlc_get_typecodes_for_unified_address_receivers(const char *ua, uintptr_t *len_ret);
-
-/**
- * Frees a list of typecodes previously obtained from the FFI.
- *
- * # Safety
- *
- * - `data` and `len` must have been obtained from
- *   [`zcashlc_get_typecodes_for_unified_address_receivers`].
- */
-void zcashlc_free_typecodes(uint32_t *data, uintptr_t len);
-
-/**
- * Returns the transparent receiver within the given Unified Address, if any.
- *
- * # Safety
- *
- * - `ua` must be non-null and must point to a null-terminated UTF-8 string.
- * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
- *   when done using it.
- */
-char *zcashlc_get_transparent_receiver_for_unified_address(const char *ua);
-
-/**
- * Returns the Sapling receiver within the given Unified Address, if any.
- *
- * # Safety
- *
- * - `ua` must be non-null and must point to a null-terminated UTF-8 string.
- * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
- *   when done using it.
- */
-char *zcashlc_get_sapling_receiver_for_unified_address(const char *ua);
-
-/**
- * Returns the network type and address kind for the given address string,
- * if the address is a valid Zcash address.
- *
- * Address kind codes are as follows:
- * * p2pkh: 0
- * * p2sh: 1
- * * sapling: 2
- * * unified: 3
- * * tex: 4
- *
- * # Safety
- *
- * - `address` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `address` must not be mutated for the duration of the function call.
- */
-bool zcashlc_get_address_metadata(const char *address,
-                                  uint32_t *network_id_ret,
-                                  uint32_t *addr_kind_ret);
-
-/**
- * Returns true when the provided key decodes to a valid Sapling extended spending key for the
- * specified network, false in any other case.
- *
- * # Safety
- *
- * - `extsk` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `extsk` must not be mutated for the duration of the function call.
- */
-bool zcashlc_is_valid_sapling_extended_spending_key(const char *extsk, uint32_t network_id);
-
-/**
- * Returns true when the provided key decodes to a valid Sapling extended full viewing key for the
- * specified network, false in any other case.
- *
- * # Safety
- *
- * - `key` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `key` must not be mutated for the duration of the function call.
- */
-bool zcashlc_is_valid_viewing_key(const char *key, uint32_t network_id);
-
-/**
- * Returns true when the provided key decodes to a valid unified full viewing key for the
- * specified network, false in any other case.
- *
- * # Safety
- *
- * - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `ufvk` must not be mutated for the duration of the
- *   function call.
- */
-bool zcashlc_is_valid_unified_full_viewing_key(const char *ufvk, uint32_t network_id);
 
 /**
  * Returns the verified transparent balance for `address`, which ignores utxos that have been
@@ -1180,7 +1034,7 @@ struct FfiWalletSummary *zcashlc_get_wallet_summary(const uint8_t *db_data,
 void zcashlc_free_wallet_summary(struct FfiWalletSummary *ptr);
 
 /**
- * Frees an array of FfiScanRanges values as allocated by `zcashlc_derive_unified_viewing_keys_from_seed`
+ * Frees an array of `FfiScanRanges` values as allocated by `zcashlc_suggest_scan_ranges`.
  *
  * # Safety
  *
@@ -1439,8 +1293,7 @@ struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
                                                int64_t value,
                                                const uint8_t *memo,
                                                uint32_t network_id,
-                                               uint32_t min_confirmations,
-                                               bool use_zip317_fees);
+                                               uint32_t min_confirmations);
 
 /**
  * Select transaction inputs, compute fees, and construct a proposal for a transaction
@@ -1467,8 +1320,7 @@ struct FfiBoxedSlice *zcashlc_propose_transfer_from_uri(const uint8_t *db_data,
                                                         int32_t account,
                                                         const char *payment_uri,
                                                         uint32_t network_id,
-                                                        uint32_t min_confirmations,
-                                                        bool use_zip317_fees);
+                                                        uint32_t min_confirmations);
 
 int32_t zcashlc_branch_id_for_height(int32_t height, uint32_t network_id);
 
@@ -1505,8 +1357,7 @@ struct FfiBoxedSlice *zcashlc_propose_shielding(const uint8_t *db_data,
                                                 uint64_t shielding_threshold,
                                                 const char *transparent_receiver,
                                                 uint32_t network_id,
-                                                uint32_t min_confirmations,
-                                                bool use_zip317_fees);
+                                                uint32_t min_confirmations);
 
 /**
  * Frees an array of FfiTxIds values as allocated by `zcashlc_create_proposed_transactions`.
@@ -1675,3 +1526,207 @@ void zcashlc_free_tor_runtime(struct TorRuntime *ptr);
  * - `tor_runtime` must not be passed to two FFI calls at the same time.
  */
 struct Decimal zcashlc_get_exchange_rate_usd(struct TorRuntime *tor_runtime);
+
+/**
+ * Returns the network type and address kind for the given address string,
+ * if the address is a valid Zcash address.
+ *
+ * Address kind codes are as follows:
+ * * p2pkh: 0
+ * * p2sh: 1
+ * * sapling: 2
+ * * unified: 3
+ * * tex: 4
+ *
+ * # Safety
+ *
+ * - `address` must be non-null and must point to a null-terminated UTF-8 string.
+ * - The memory referenced by `address` must not be mutated for the duration of the function call.
+ */
+bool zcashlc_get_address_metadata(const char *address,
+                                  uint32_t *network_id_ret,
+                                  uint32_t *addr_kind_ret);
+
+/**
+ * Extracts the typecodes of the receivers within the given Unified Address.
+ *
+ * Returns a pointer to a slice of typecodes. `len_ret` is set to the length of the
+ * slice.
+ *
+ * See the following sections of ZIP 316 for details on how to interpret typecodes:
+ * - [List of known typecodes](https://zips.z.cash/zip-0316#encoding-of-unified-addresses)
+ * - [Adding new types](https://zips.z.cash/zip-0316#adding-new-types)
+ * - [Metadata Items](https://zips.z.cash/zip-0316#metadata-items)
+ *
+ * # Safety
+ *
+ * - `ua` must be non-null and must point to a null-terminated UTF-8 string.
+ * - The memory referenced by `ua` must not be mutated for the duration of the function call.
+ * - Call [`zcashlc_free_typecodes`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+uint32_t *zcashlc_get_typecodes_for_unified_address_receivers(const char *ua, uintptr_t *len_ret);
+
+/**
+ * Frees a list of typecodes previously obtained from the FFI.
+ *
+ * # Safety
+ *
+ * - `data` and `len` must have been obtained from
+ *   [`zcashlc_get_typecodes_for_unified_address_receivers`].
+ */
+void zcashlc_free_typecodes(uint32_t *data, uintptr_t len);
+
+/**
+ * Returns true when the provided key decodes to a valid Sapling extended spending key for the
+ * specified network, false in any other case.
+ *
+ * # Safety
+ *
+ * - `extsk` must be non-null and must point to a null-terminated UTF-8 string.
+ * - The memory referenced by `extsk` must not be mutated for the duration of the function call.
+ */
+bool zcashlc_is_valid_sapling_extended_spending_key(const char *extsk, uint32_t network_id);
+
+/**
+ * Returns true when the provided key decodes to a valid Sapling extended full viewing key for the
+ * specified network, false in any other case.
+ *
+ * # Safety
+ *
+ * - `key` must be non-null and must point to a null-terminated UTF-8 string.
+ * - The memory referenced by `key` must not be mutated for the duration of the function call.
+ */
+bool zcashlc_is_valid_viewing_key(const char *key, uint32_t network_id);
+
+/**
+ * Returns true when the provided key decodes to a valid unified full viewing key for the
+ * specified network, false in any other case.
+ *
+ * # Safety
+ *
+ * - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
+ * - The memory referenced by `ufvk` must not be mutated for the duration of the
+ *   function call.
+ */
+bool zcashlc_is_valid_unified_full_viewing_key(const char *ufvk, uint32_t network_id);
+
+/**
+ * Derives and returns a unified spending key from the given seed for the given account ID.
+ *
+ * Returns the binary encoding of the spending key. The caller should manage the memory of (and
+ * store, if necessary) the returned spending key in a secure fashion.
+ *
+ * # Safety
+ *
+ * - `seed` must be non-null and valid for reads for `seed_len` bytes.
+ * - The memory referenced by `seed` must not be mutated for the duration of the function call.
+ * - The total size `seed_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - Call `zcashlc_free_binary_key` to free the memory associated with the returned pointer when
+ *   you are finished using it.
+ */
+struct FFIBinaryKey *zcashlc_derive_spending_key(const uint8_t *seed,
+                                                 uintptr_t seed_len,
+                                                 int32_t account,
+                                                 uint32_t network_id);
+
+/**
+ * Obtains the unified full viewing key for the given binary-encoded unified spending key
+ * and returns the resulting encoded UFVK string. `usk_ptr` should point to an array of `usk_len`
+ * bytes containing a unified spending key encoded as returned from the `zcashlc_create_account`
+ * or `zcashlc_derive_spending_key` functions.
+ *
+ * # Safety
+ *
+ * - `usk_ptr` must be non-null and must point to an array of `usk_len` bytes.
+ * - The memory referenced by `usk_ptr` must not be mutated for the duration of the function call.
+ * - The total size `usk_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+ *   when you are done using it.
+ */
+char *zcashlc_spending_key_to_full_viewing_key(const uint8_t *usk_ptr,
+                                               uintptr_t usk_len,
+                                               uint32_t network_id);
+
+/**
+ * Returns the transparent receiver within the given Unified Address, if any.
+ *
+ * # Safety
+ *
+ * - `ua` must be non-null and must point to a null-terminated UTF-8 string.
+ * - The memory referenced by `ua` must not be mutated for the duration of the function call.
+ * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+char *zcashlc_get_transparent_receiver_for_unified_address(const char *ua);
+
+/**
+ * Returns the Sapling receiver within the given Unified Address, if any.
+ *
+ * # Safety
+ *
+ * - `ua` must be non-null and must point to a null-terminated UTF-8 string.
+ * - The memory referenced by `ua` must not be mutated for the duration of the function call.
+ * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+char *zcashlc_get_sapling_receiver_for_unified_address(const char *ua);
+
+/**
+ * Derives and returns a ZIP 32 Arbitrary Key from the given seed at the "wallet level", i.e.
+ * directly from the seed with no ZIP 32 path applied.
+ *
+ * The resulting key will be the same across all networks (Zcash mainnet, Zcash testnet, OtherCoin
+ * mainnet, and so on). You can think of it as a context-specific seed fingerprint that can be used
+ * as (static) key material.
+ *
+ * `context_string` is a globally-unique non-empty sequence of at most 252 bytes that identifies
+ * the desired context.
+ *
+ * # Safety
+ *
+ * - `context_string` must be non-null and valid for reads for `context_string_len` bytes.
+ * - The memory referenced by `context_string` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `context_string_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `seed` must be non-null and valid for reads for `seed_len` bytes.
+ * - The memory referenced by `seed` must not be mutated for the duration of the function call.
+ * - The total size `seed_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - Call `zcashlc_free_boxed_slice` to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_derive_arbitrary_wallet_key(const uint8_t *context_string,
+                                                          uintptr_t context_string_len,
+                                                          const uint8_t *seed,
+                                                          uintptr_t seed_len);
+
+/**
+ * Derives and returns a ZIP 32 Arbitrary Key from the given seed at the account level.
+ *
+ * `context_string` is a globally-unique non-empty sequence of at most 252 bytes that identifies
+ * the desired context.
+ *
+ * # Safety
+ *
+ * - `context_string` must be non-null and valid for reads for `context_string_len` bytes.
+ * - The memory referenced by `context_string` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `context_string_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `seed` must be non-null and valid for reads for `seed_len` bytes`.
+ * - The memory referenced by `seed` must not be mutated for the duration of the function call.
+ * - The total size `seed_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - Call `zcashlc_free_boxed_slice` to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_derive_arbitrary_account_key(const uint8_t *context_string,
+                                                           uintptr_t context_string_len,
+                                                           const uint8_t *seed,
+                                                           uintptr_t seed_len,
+                                                           int32_t account,
+                                                           uint32_t network_id);

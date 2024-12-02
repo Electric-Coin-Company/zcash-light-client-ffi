@@ -610,6 +610,11 @@ void zcashlc_free_binary_key(struct FFIBinaryKey *ptr);
  * - The memory referenced by `seed` must not be mutated for the duration of the function call.
  * - The total size `seed_len` must be no larger than `isize::MAX`. See the safety documentation
  *   of pointer::offset.
+ * - `treestate` must be non-null and valid for reads for `treestate_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `treestate` must not be mutated for the duration of the function call.
+ * - The total size `treestate_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
  * - Call [`zcashlc_free_binary_key`] to free the memory associated with the returned pointer when
  *   you are finished using it.
  *
@@ -623,6 +628,37 @@ struct FFIBinaryKey *zcashlc_create_account(const uint8_t *db_data,
                                             uintptr_t treestate_len,
                                             int64_t recover_until,
                                             uint32_t network_id);
+
+/**
+ * Adds a new account to the wallet by importing the UFVK that will be used to detect incoming
+ * payments.
+ *
+ * Returns the globally unique identifier for the account.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
+ * - `treestate` must be non-null and valid for reads for `treestate_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `treestate` must not be mutated for the duration of the function call.
+ * - The total size `treestate_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ *
+ */
+int32_t zcashlc_import_account_ufvk(const uint8_t *db_data,
+                                    uintptr_t db_data_len,
+                                    const char *ufvk,
+                                    const uint8_t *treestate,
+                                    uintptr_t treestate_len,
+                                    int64_t recover_until,
+                                    uint32_t network_id,
+                                    uint32_t purpose);
 
 /**
  * Checks whether the given seed is relevant to any of the accounts in the wallet.
@@ -1185,8 +1221,8 @@ bool zcashlc_init_block_metadata_db(const uint8_t *fs_block_db_root,
  * - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  * - Block metadata represented in `blocks_meta` must be non-null. Caller must guarantee that the
- * memory reference by this pointer is not freed up, dereferenced or invalidated while this function
- * is invoked.
+ *   memory reference by this pointer is not freed up, dereferenced or invalidated while this
+ *   function is invoked.
  */
 bool zcashlc_write_block_metadata(const uint8_t *fs_block_db_root,
                                   uintptr_t fs_block_db_root_len,

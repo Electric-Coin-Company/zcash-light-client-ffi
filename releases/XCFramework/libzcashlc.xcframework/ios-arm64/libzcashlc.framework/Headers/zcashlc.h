@@ -6,6 +6,21 @@
 typedef struct TorRuntime TorRuntime;
 
 /**
+ * A struct that contains a 16-byte account uuid along with key derivation metadata for that
+ * account.
+ *
+ * A returned value containing the all-zeros seed fingerprint and/or u32::MAX for the
+ * hd_account_index indicates that no derivation metadata is available.
+ */
+typedef struct FfiAccount {
+  uint8_t uuid_bytes[16];
+  char *account_name;
+  char *key_source;
+  uint8_t seed_fingerprint[32];
+  uint32_t hd_account_index;
+} FfiAccount;
+
+/**
  * A struct that contains a 16-byte account uuid.
  */
 typedef struct FfiUuid {
@@ -542,6 +557,15 @@ int32_t zcashlc_init_data_database(const uint8_t *db_data,
                                    uint32_t network_id);
 
 /**
+ * Frees a FfiAccount value
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`FfiAccount`].
+ */
+void zcashlc_free_account(struct FfiAccount *ptr);
+
+/**
  * Frees an array of FfiAccounts values as allocated by `zcashlc_list_accounts`.
  *
  * # Safety
@@ -568,6 +592,28 @@ void zcashlc_free_accounts(struct FfiAccounts *ptr);
 struct FfiAccounts *zcashlc_list_accounts(const uint8_t *db_data,
                                           uintptr_t db_data_len,
                                           uint32_t network_id);
+
+/**
+ * Returns the account data for the specified account identifier, or the [`FfiAccount::NOT_FOUND`]
+ * sentinel value if the account id does not correspond to an account in the wallet.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an alignment
+ *    of `1`.
+ * - Call [`zcashlc_free_account`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+struct FfiAccount *zcashlc_get_account(const uint8_t *db_data,
+                                       uintptr_t db_data_len,
+                                       uint32_t network_id,
+                                       const uint8_t *account_uuid_bytes);
 
 /**
  * Frees a FFIBinaryKey value
@@ -642,6 +688,11 @@ void zcashlc_free_ffi_uuid(struct FfiUuid *ptr);
  * Adds a new account to the wallet by importing the UFVK that will be used to detect incoming
  * payments.
  *
+ * Derivation metadata may optionally be included. To indicate that no derivation metadata is
+ * available, the `seed_fingerprint` argument should be set to the null pointer and
+ * `hd_account_index` should be set to the value `u32::MAX`. Derivation metadata will not be
+ * stored unless both the seed fingerprint and the HD account index are provided.
+ *
  * Returns the globally unique identifier for the account.
  *
  * # Safety
@@ -658,6 +709,8 @@ void zcashlc_free_ffi_uuid(struct FfiUuid *ptr);
  * - The memory referenced by `treestate` must not be mutated for the duration of the function call.
  * - The total size `treestate_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `seed_fingerprint` must either be either null or valid for reads for 32 bytes, and it must
+ *   have an alignment of `1`.
  *
  * - Call [`zcashlc_free_ffi_uuid`] to free the memory associated with the returned pointer when
  *   you are finished using it.
@@ -671,7 +724,9 @@ struct FfiUuid *zcashlc_import_account_ufvk(const uint8_t *db_data,
                                             uint32_t network_id,
                                             uint32_t purpose,
                                             const char *account_name,
-                                            const char *key_source);
+                                            const char *key_source,
+                                            const uint8_t *seed_fingerprint,
+                                            uint32_t hd_account_index_raw);
 
 /**
  * Checks whether the given seed is relevant to any of the accounts in the wallet.

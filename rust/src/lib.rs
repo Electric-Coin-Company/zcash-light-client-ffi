@@ -5,7 +5,6 @@ use ffi_helpers::panic::catch_panic;
 use prost::Message;
 use secrecy::Secret;
 use std::array::TryFromSliceError;
-use std::collections::HashMap;
 use std::convert::{Infallible, TryFrom, TryInto};
 use std::error::Error;
 use std::ffi::{CStr, CString, OsStr};
@@ -42,7 +41,7 @@ use zcash_client_backend::{
     },
     encoding::AddressCodec,
     fees::DustOutputPolicy,
-    keys::{DecodingError, Era, UnifiedAddressRequest, UnifiedSpendingKey},
+    keys::{DecodingError, Era, UnifiedSpendingKey},
     proto::{proposal::Proposal, service::TreeState},
     tor::http::cryptex,
     wallet::{NoteId, OvkPolicy, WalletTransparentOutput},
@@ -955,8 +954,7 @@ pub unsafe extern "C" fn zcashlc_get_next_available_address(
         let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let account_uuid = account_uuid_from_bytes(account_uuid_bytes)?;
 
-        let request = UnifiedAddressRequest::new(true, true, true).expect("have shielded receiver");
-        match db_data.get_next_available_address(account_uuid, request) {
+        match db_data.get_next_available_address(account_uuid, None) {
             Ok(Some(ua)) => {
                 let address_str = ua.encode(&network);
                 Ok(CString::new(address_str).unwrap().into_raw())
@@ -2982,8 +2980,6 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transaction_pczt(
             )
         })?;
 
-        let mut unused_transparent_outputs = HashMap::new();
-
         let account_id = db_data
             .get_account_for_ufvk(&ufvk)
             .map_err(|e| anyhow!("Error retrieving account information for ufvk: {}", e))?
@@ -2996,14 +2992,9 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transaction_pczt(
             let pczt = create_proposed_transaction_pczt::<_, _, Infallible, _, Infallible, _>(
                 &mut db_data,
                 &network,
-                &ufvk,
                 account_id,
                 OvkPolicy::Sender,
-                proposal.fee_rule(),
-                proposal.min_target_height(),
-                &[],
-                &proposal.steps().head,
-                &mut unused_transparent_outputs,
+                &proposal,
             )
             .map_err(|e| anyhow!("Error creating PCZT from single-step proposal: {}", e))?;
 

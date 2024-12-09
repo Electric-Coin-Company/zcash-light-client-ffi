@@ -473,6 +473,15 @@ typedef struct Decimal {
 } Decimal;
 
 /**
+ * A struct that contains a Zcash unified address, along with the diversifier index used to
+ * generate that address.
+ */
+typedef struct FfiAddress {
+  char *address;
+  uint8_t diversifier_index_bytes[11];
+} FfiAddress;
+
+/**
  * Initializes global Rust state, such as the logging infrastructure and threadpools.
  *
  * `log_level` defines how the Rust layer logs its events. These values are supported,
@@ -1569,13 +1578,114 @@ struct FfiTxIds *zcashlc_create_proposed_transactions(const uint8_t *db_data,
  * - The total size `proposal_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of `pointer::offset`.
  * - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
  */
-struct FfiBoxedSlice *zcashlc_create_proposed_transaction_pczt(const uint8_t *db_data,
-                                                               uintptr_t db_data_len,
-                                                               const uint8_t *proposal_ptr,
-                                                               uintptr_t proposal_len,
-                                                               const char *ufvk,
-                                                               uint32_t network_id);
+struct FfiBoxedSlice *zcashlc_create_pczt_from_proposal(const uint8_t *db_data,
+                                                        uintptr_t db_data_len,
+                                                        uint32_t network_id,
+                                                        const uint8_t *proposal_ptr,
+                                                        uintptr_t proposal_len,
+                                                        const char *ufvk);
+
+/**
+ * Adds proofs to the given PCZT.
+ *
+ * Returns the updated PCZT in its serialized format.
+ *
+ * # Safety
+ *
+ * - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it
+ *   must have an alignment of `1`. Its contents must be an encoded Proposal protobuf.
+ * - The memory referenced by `pczt_ptr` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `spend_params` must be non-null and valid for reads for `spend_params_len` bytes,
+ *   and it must have an alignment of `1`. Its contents must be the Sapling spend proving
+ *   parameters.
+ * - The memory referenced by `spend_params` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `spend_params_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `output_params` must be non-null and valid for reads for `output_params_len` bytes,
+ *   and it must have an alignment of `1`. Its contents must be the Sapling output
+ *   proving parameters.
+ * - The memory referenced by `output_params` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_add_proofs_to_pczt(const uint8_t *pczt_ptr,
+                                                 uintptr_t pczt_len,
+                                                 const uint8_t *spend_params,
+                                                 uintptr_t spend_params_len,
+                                                 const uint8_t *output_params,
+                                                 uintptr_t output_params_len);
+
+/**
+ * Takes a PCZT that has been separately proven and signed, finalizes it, and stores it
+ * in the wallet.
+ *
+ * Returns the txid of the completed transaction as a byte array.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must
+ *   have an alignment of `1`. Its contents must be a string representing a valid system
+ *   path in the operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `pczt_with_proofs_ptr` must be non-null and valid for reads for `pczt_with_proofs_len` bytes, and it
+ *   must have an alignment of `1`. Its contents must be an encoded Proposal protobuf.
+ * - The memory referenced by `pczt_with_proofs_ptr` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `pczt_with_proofs_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `pczt_with_sigs_ptr` must be non-null and valid for reads for `pczt_with_sigs_len` bytes, and it
+ *   must have an alignment of `1`. Its contents must be an encoded Proposal protobuf.
+ * - The memory referenced by `pczt_with_sigs_ptr` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `pczt_with_sigs_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `pczt_with_sigs_ptr` must be non-null and valid for reads for `pczt_with_sigs_len` bytes, and it
+ *   must have an alignment of `1`. Its contents must be an encoded Proposal protobuf.
+ * - The memory referenced by `pczt_with_sigs_ptr` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `pczt_with_sigs_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `spend_params` must be non-null and valid for reads for `spend_params_len` bytes,
+ *   and it must have an alignment of `1`. Its contents must be the Sapling spend proving
+ *   parameters.
+ * - The memory referenced by `spend_params` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `spend_params_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `output_params` must be non-null and valid for reads for `output_params_len` bytes,
+ *   and it must have an alignment of `1`. Its contents must be the Sapling output
+ *   proving parameters.
+ * - The memory referenced by `output_params` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_extract_and_store_from_pczt(const uint8_t *db_data,
+                                                          uintptr_t db_data_len,
+                                                          uint32_t network_id,
+                                                          const uint8_t *pczt_with_proofs_ptr,
+                                                          uintptr_t pczt_with_proofs_len,
+                                                          const uint8_t *pczt_with_sigs_ptr,
+                                                          uintptr_t pczt_with_sigs_len,
+                                                          const uint8_t *spend_params,
+                                                          uintptr_t spend_params_len,
+                                                          const uint8_t *output_params,
+                                                          uintptr_t output_params_len);
 
 /**
  * Sets the transaction status to the provided value.
@@ -1797,24 +1907,37 @@ char *zcashlc_spending_key_to_full_viewing_key(const uint8_t *usk_ptr,
                                                uint32_t network_id);
 
 /**
- * Derives a unified address address for the provided UFVK. If `diversifier_index_bytes` is null,
- * the default address for the UFVK is returned.
+ * Frees a FfiAddress value
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`FfiAddress`].
+ */
+void zcashlc_free_ffi_address(struct FfiAddress *ptr);
+
+/**
+ * Derives a unified address address for the provided UFVK, along with the diversifier at which it
+ * was derived; this may not be equal to the provided diversifier index if no valid Sapling
+ * address could be derived at that index. If the `diversifier_index_bytes` parameter is null, the
+ * default address for the UFVK is returned.
  *
  * # Safety
  *
  * - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
  * - `diversifier_index_bytes must either be null or be valid for reads for 11 bytes and have an
  *   alignment of `1`.
- * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+ * - Call [`zcashlc_free_ffi_address`] to free the memory associated with the returned pointer
  *   when done using it.
  */
-char *zcashlc_derive_address_ufvk(uint32_t network_id,
-                                  const char *ufvk,
-                                  const uint8_t *diversifier_index_bytes);
+struct FfiAddress *zcashlc_derive_address_ufvk(uint32_t network_id,
+                                               const char *ufvk,
+                                               const uint8_t *diversifier_index_bytes);
 
 /**
- * Derives a unified address address for the provided UIVK. If `diversifier_index_bytes` is null,
- * the default address for the UIVK is returned.
+ * Derives a unified address address for the provided UIVK, along with the diversifier at which it
+ * was derived; this may not be equal to the provided diversifier index if no valid Sapling
+ * address could be derived at that index. If the `diversifier_index_bytes` parameter is null, the
+ * default address for the UIVK is returned.
  *
  * # Safety
  *
@@ -1824,9 +1947,9 @@ char *zcashlc_derive_address_ufvk(uint32_t network_id,
  * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
  *   when done using it.
  */
-char *zcashlc_derive_address_uivk(uint32_t network_id,
-                                  const char *uivk,
-                                  const uint8_t *diversifier_index_bytes);
+struct FfiAddress *zcashlc_derive_address_uivk(uint32_t network_id,
+                                               const char *uivk,
+                                               const uint8_t *diversifier_index_bytes);
 
 /**
  * Returns the transparent receiver within the given Unified Address, if any.

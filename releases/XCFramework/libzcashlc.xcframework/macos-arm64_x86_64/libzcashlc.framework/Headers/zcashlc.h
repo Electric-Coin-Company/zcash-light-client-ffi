@@ -1774,7 +1774,7 @@ bool zcashlc_is_valid_unified_full_viewing_key(const char *ufvk, uint32_t networ
  */
 struct FfiBoxedSlice *zcashlc_derive_spending_key(const uint8_t *seed,
                                                   uintptr_t seed_len,
-                                                  int32_t account,
+                                                  int32_t hd_account_index,
                                                   uint32_t network_id);
 
 /**
@@ -1795,6 +1795,38 @@ struct FfiBoxedSlice *zcashlc_derive_spending_key(const uint8_t *seed,
 char *zcashlc_spending_key_to_full_viewing_key(const uint8_t *usk_ptr,
                                                uintptr_t usk_len,
                                                uint32_t network_id);
+
+/**
+ * Derives a unified address address for the provided UFVK. If `diversifier_index_bytes` is null,
+ * the default address for the UFVK is returned.
+ *
+ * # Safety
+ *
+ * - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
+ * - `diversifier_index_bytes must either be null or be valid for reads for 11 bytes and have an
+ *   alignment of `1`.
+ * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+char *zcashlc_derive_address_ufvk(uint32_t network_id,
+                                  const char *ufvk,
+                                  const uint8_t *diversifier_index_bytes);
+
+/**
+ * Derives a unified address address for the provided UIVK. If `diversifier_index_bytes` is null,
+ * the default address for the UIVK is returned.
+ *
+ * # Safety
+ *
+ * - `uivk` must be non-null and must point to a null-terminated UTF-8 string.
+ * - `diversifier_index_bytes must either be null or be valid for reads for 11 bytes and have an
+ *   alignment of `1`.
+ * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+char *zcashlc_derive_address_uivk(uint32_t network_id,
+                                  const char *uivk,
+                                  const uint8_t *diversifier_index_bytes);
 
 /**
  * Returns the transparent receiver within the given Unified Address, if any.

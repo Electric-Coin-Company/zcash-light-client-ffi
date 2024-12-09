@@ -32,9 +32,8 @@ use zcash_client_backend::{
         chain::{scan_cached_blocks, CommitmentTreeRoot, ScanSummary},
         scanning::ScanPriority,
         wallet::{
-            create_proposed_transaction_pczt, create_proposed_transactions,
-            decrypt_and_store_transaction, input_selection::GreedyInputSelector, propose_shielding,
-            propose_transfer,
+            create_pczt_from_proposal, create_proposed_transactions, decrypt_and_store_transaction,
+            input_selection::GreedyInputSelector, propose_shielding, propose_transfer,
         },
         Account, AccountBalance, AccountBirthday, Balance, InputSource, SeedRelevance,
         TransactionDataRequest, WalletCommitmentTrees, WalletRead, WalletSummary, WalletWrite,
@@ -2989,7 +2988,7 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transaction_pczt(
             .id();
 
         if proposal.steps().len() == 1 {
-            let pczt = create_proposed_transaction_pczt::<_, _, Infallible, _, Infallible, _>(
+            let pczt = create_pczt_from_proposal::<_, _, Infallible, _, Infallible, _>(
                 &mut db_data,
                 &network,
                 account_id,

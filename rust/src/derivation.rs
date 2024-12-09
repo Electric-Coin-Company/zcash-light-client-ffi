@@ -8,7 +8,7 @@ use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 use std::slice;
 use zcash_client_backend::keys::UnifiedIncomingViewingKey;
-use zcash_primitives::consensus::NetworkConstants;
+use zcash_primitives::consensus::{Network, NetworkConstants};
 use zip32::{arbitrary, ChildIndex, DiversifierIndex};
 
 use zcash_address::{
@@ -23,7 +23,8 @@ use zcash_client_backend::{
 use zcash_primitives::legacy::TransparentAddress;
 
 use crate::{
-    decode_usk, free_ptr_from_vec, parse_network, unwrap_exc_or, unwrap_exc_or_null, FfiBoxedSlice,
+    decode_usk, free_ptr_from_vec, parse_network, unwrap_exc_or, unwrap_exc_or_null,
+    zcashlc_string_free, FfiBoxedSlice,
 };
 
 enum AddressType {
@@ -375,22 +376,62 @@ impl zcash_address::TryFromRawAddress for UnifiedAddressParser {
     }
 }
 
-/// Derives a unified address address for the provided UFVK. If `diversifier_index_bytes` is null,
-/// the default address for the UFVK is returned.
+/// A struct that contains a Zcash unified address, along with the diversifier index used to
+/// generate that address.
+#[repr(C)]
+pub struct FfiAddress {
+    address: *mut c_char,
+    diversifier_index_bytes: [u8; 11],
+}
+
+impl FfiAddress {
+    fn new(
+        network: &Network,
+        address: UnifiedAddress,
+        diversifier_index: DiversifierIndex,
+    ) -> Self {
+        let address_str = address.encode(network);
+        Self {
+            address: CString::new(address_str).unwrap().into_raw(),
+            diversifier_index_bytes: *diversifier_index.as_bytes(),
+        }
+    }
+}
+
+/// Frees a FfiAddress value
+///
+/// # Safety
+///
+/// - `ptr` must be non-null and must point to a struct having the layout of [`FfiAddress`].
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_free_ffi_address(ptr: *mut FfiAddress) {
+    if !ptr.is_null() {
+        let ffi_address: Box<FfiAddress> = unsafe { Box::from_raw(ptr) };
+        if !(ffi_address.address.is_null()) {
+            unsafe { zcashlc_string_free(ffi_address.address) }
+        }
+        drop(ffi_address);
+    }
+}
+
+/// Derives a unified address address for the provided UFVK, along with the diversifier at which it
+/// was derived; this may not be equal to the provided diversifier index if no valid Sapling
+/// address could be derived at that index. If the `diversifier_index_bytes` parameter is null, the
+/// default address for the UFVK is returned.
 ///
 /// # Safety
 ///
 /// - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
 /// - `diversifier_index_bytes must either be null or be valid for reads for 11 bytes and have an
 ///   alignment of `1`.
-/// - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+/// - Call [`zcashlc_free_ffi_address`] to free the memory associated with the returned pointer
 ///   when done using it.
 #[no_mangle]
 pub unsafe extern "C" fn zcashlc_derive_address_ufvk(
     network_id: u32,
     ufvk: *const c_char,
     diversifier_index_bytes: *const u8,
-) -> *mut c_char {
+) -> *mut FfiAddress {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let ufvk_str = unsafe { CStr::from_ptr(ufvk).to_str()? };
@@ -402,7 +443,7 @@ pub unsafe extern "C" fn zcashlc_derive_address_ufvk(
             )
         })?;
 
-        let (ua, _) = if diversifier_index_bytes.is_null() {
+        let (ua, di) = if diversifier_index_bytes.is_null() {
             ufvk.default_address(None)
         } else {
             let j = DiversifierIndex::from(<[u8; 11]>::try_from(unsafe {
@@ -411,14 +452,15 @@ pub unsafe extern "C" fn zcashlc_derive_address_ufvk(
             ufvk.find_address(j, None)
         }?;
 
-        let address_str = ua.encode(&network);
-        Ok(CString::new(address_str).unwrap().into_raw())
+        Ok(Box::into_raw(Box::new(FfiAddress::new(&network, ua, di))))
     });
     unwrap_exc_or_null(res)
 }
 
-/// Derives a unified address address for the provided UIVK. If `diversifier_index_bytes` is null,
-/// the default address for the UIVK is returned.
+/// Derives a unified address address for the provided UIVK, along with the diversifier at which it
+/// was derived; this may not be equal to the provided diversifier index if no valid Sapling
+/// address could be derived at that index. If the `diversifier_index_bytes` parameter is null, the
+/// default address for the UIVK is returned.
 ///
 /// # Safety
 ///
@@ -432,7 +474,7 @@ pub unsafe extern "C" fn zcashlc_derive_address_uivk(
     network_id: u32,
     uivk: *const c_char,
     diversifier_index_bytes: *const u8,
-) -> *mut c_char {
+) -> *mut FfiAddress {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let uivk_str = unsafe { CStr::from_ptr(uivk).to_str()? };
@@ -444,7 +486,7 @@ pub unsafe extern "C" fn zcashlc_derive_address_uivk(
             )
         })?;
 
-        let (ua, _) = if diversifier_index_bytes.is_null() {
+        let (ua, di) = if diversifier_index_bytes.is_null() {
             uivk.default_address(None)
         } else {
             let j = DiversifierIndex::from(<[u8; 11]>::try_from(unsafe {
@@ -453,8 +495,7 @@ pub unsafe extern "C" fn zcashlc_derive_address_uivk(
             uivk.find_address(j, None)
         }?;
 
-        let address_str = ua.encode(&network);
-        Ok(CString::new(address_str).unwrap().into_raw())
+        Ok(Box::into_raw(Box::new(FfiAddress::new(&network, ua, di))))
     });
     unwrap_exc_or_null(res)
 }

@@ -2,6 +2,9 @@
 
 use anyhow::anyhow;
 use ffi_helpers::panic::catch_panic;
+use pczt::roles::combiner::Combiner;
+use pczt::roles::prover::Prover;
+use pczt::Pczt;
 use prost::Message;
 use secrecy::Secret;
 use std::array::TryFromSliceError;
@@ -19,6 +22,7 @@ use tor_rtcompat::BlockOn as _;
 use tracing::{debug, metadata::LevelFilter};
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
+use zcash_client_backend::data_api::wallet::extract_and_store_transaction_from_pczt;
 use zcash_client_backend::data_api::{AccountPurpose, TransactionStatus, Zip32Derivation};
 use zcash_client_backend::fees::zip317::MultiOutputChangeStrategy;
 use zcash_client_backend::fees::{SplitPolicy, StandardFeeRule};
@@ -1750,7 +1754,7 @@ impl FfiAccountBalance {
             account_uuid: account_uuid.expose_uuid().into_bytes(),
             sapling_balance: FfiBalance::new(balance.sapling_balance()),
             orchard_balance: FfiBalance::new(balance.orchard_balance()),
-            unshielded: ZatBalance::from(balance.unshielded()).into(),
+            unshielded: ZatBalance::from(balance.unshielded_balance().total()).into(),
         }
     }
 }
@@ -2952,14 +2956,16 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transactions(
 /// - The total size `proposal_len` must be no larger than `isize::MAX`. See the safety
 ///   documentation of `pointer::offset`.
 /// - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
+/// - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+///   pointer when done using it.
 #[no_mangle]
-pub unsafe extern "C" fn zcashlc_create_proposed_transaction_pczt(
+pub unsafe extern "C" fn zcashlc_create_pczt_from_proposal(
     db_data: *const u8,
     db_data_len: usize,
+    network_id: u32,
     proposal_ptr: *const u8,
     proposal_len: usize,
     ufvk: *const c_char,
-    network_id: u32,
 ) -> *mut FfiBoxedSlice {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
@@ -3003,6 +3009,171 @@ pub unsafe extern "C" fn zcashlc_create_proposed_transaction_pczt(
                 "Multi-step proposals are not yet supported for PCZT generation."
             ))
         }
+    });
+    unwrap_exc_or_null(res)
+}
+
+/// Adds proofs to the given PCZT.
+///
+/// Returns the updated PCZT in its serialized format.
+///
+/// # Safety
+///
+/// - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it
+///   must have an alignment of `1`. Its contents must be an encoded Proposal protobuf.
+/// - The memory referenced by `pczt_ptr` must not be mutated for the duration of the
+///   function call.
+/// - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of `pointer::offset`.
+/// - `spend_params` must be non-null and valid for reads for `spend_params_len` bytes,
+///   and it must have an alignment of `1`. Its contents must be the Sapling spend proving
+///   parameters.
+/// - The memory referenced by `spend_params` must not be mutated for the duration of the
+///   function call.
+/// - The total size `spend_params_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of `pointer::offset`.
+/// - `output_params` must be non-null and valid for reads for `output_params_len` bytes,
+///   and it must have an alignment of `1`. Its contents must be the Sapling output
+///   proving parameters.
+/// - The memory referenced by `output_params` must not be mutated for the duration of the
+///   function call.
+/// - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+/// - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+///   pointer when done using it.
+#[no_mangle]
+pub extern "C" fn zcashlc_add_proofs_to_pczt(
+    pczt_ptr: *const u8,
+    pczt_len: usize,
+    spend_params: *const u8,
+    spend_params_len: usize,
+    output_params: *const u8,
+    output_params_len: usize,
+) -> *mut FfiBoxedSlice {
+    let res = catch_panic(|| {
+        let pczt_bytes = unsafe { slice::from_raw_parts(pczt_ptr, pczt_len) };
+        let pczt = Pczt::parse(pczt_bytes).map_err(|e| anyhow!("Invalid PCZT: {:?}", e))?;
+        let spend_params = Path::new(OsStr::from_bytes(unsafe {
+            slice::from_raw_parts(spend_params, spend_params_len)
+        }));
+        let output_params = Path::new(OsStr::from_bytes(unsafe {
+            slice::from_raw_parts(output_params, output_params_len)
+        }));
+
+        let prover = LocalTxProver::new(spend_params, output_params);
+
+        let pczt_with_proofs = Prover::new(pczt)
+            .create_orchard_proof(&orchard::circuit::ProvingKey::build())
+            .map_err(|e| anyhow!("Failed to create Orchard proof for PCZT: {:?}", e))?
+            .create_sapling_proofs(&prover, &prover)
+            .map_err(|e| anyhow!("Failed to create Sapling proofs for PCZT: {:?}", e))?
+            .finish();
+
+        Ok(FfiBoxedSlice::some(pczt_with_proofs.serialize()))
+    });
+    unwrap_exc_or_null(res)
+}
+
+/// Takes a PCZT that has been separately proven and signed, finalizes it, and stores it
+/// in the wallet.
+///
+/// Returns the txid of the completed transaction as a byte array.
+///
+/// # Safety
+///
+/// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must
+///   have an alignment of `1`. Its contents must be a string representing a valid system
+///   path in the operating system's preferred representation.
+/// - The memory referenced by `db_data` must not be mutated for the duration of the
+///   function call.
+/// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of `pointer::offset`.
+/// - `pczt_with_proofs_ptr` must be non-null and valid for reads for `pczt_with_proofs_len` bytes, and it
+///   must have an alignment of `1`. Its contents must be an encoded Proposal protobuf.
+/// - The memory referenced by `pczt_with_proofs_ptr` must not be mutated for the duration of the
+///   function call.
+/// - The total size `pczt_with_proofs_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of `pointer::offset`.
+/// - `pczt_with_sigs_ptr` must be non-null and valid for reads for `pczt_with_sigs_len` bytes, and it
+///   must have an alignment of `1`. Its contents must be an encoded Proposal protobuf.
+/// - The memory referenced by `pczt_with_sigs_ptr` must not be mutated for the duration of the
+///   function call.
+/// - The total size `pczt_with_sigs_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of `pointer::offset`.
+/// - `pczt_with_sigs_ptr` must be non-null and valid for reads for `pczt_with_sigs_len` bytes, and it
+///   must have an alignment of `1`. Its contents must be an encoded Proposal protobuf.
+/// - The memory referenced by `pczt_with_sigs_ptr` must not be mutated for the duration of the
+///   function call.
+/// - The total size `pczt_with_sigs_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of `pointer::offset`.
+/// - `spend_params` must be non-null and valid for reads for `spend_params_len` bytes,
+///   and it must have an alignment of `1`. Its contents must be the Sapling spend proving
+///   parameters.
+/// - The memory referenced by `spend_params` must not be mutated for the duration of the
+///   function call.
+/// - The total size `spend_params_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of `pointer::offset`.
+/// - `output_params` must be non-null and valid for reads for `output_params_len` bytes,
+///   and it must have an alignment of `1`. Its contents must be the Sapling output
+///   proving parameters.
+/// - The memory referenced by `output_params` must not be mutated for the duration of the
+///   function call.
+/// - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+/// - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+///   pointer when done using it.
+#[no_mangle]
+pub extern "C" fn zcashlc_extract_and_store_from_pczt(
+    db_data: *const u8,
+    db_data_len: usize,
+    network_id: u32,
+    pczt_with_proofs_ptr: *const u8,
+    pczt_with_proofs_len: usize,
+    pczt_with_sigs_ptr: *const u8,
+    pczt_with_sigs_len: usize,
+    spend_params: *const u8,
+    spend_params_len: usize,
+    output_params: *const u8,
+    output_params_len: usize,
+) -> *mut FfiBoxedSlice {
+    let res = catch_panic(|| {
+        let network = parse_network(network_id)?;
+        let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
+
+        let pczt_with_proofs_bytes =
+            unsafe { slice::from_raw_parts(pczt_with_proofs_ptr, pczt_with_proofs_len) };
+        let pczt_with_proofs =
+            Pczt::parse(pczt_with_proofs_bytes).map_err(|e| anyhow!("Invalid PCZT: {:?}", e))?;
+
+        let pczt_with_sigs_bytes =
+            unsafe { slice::from_raw_parts(pczt_with_sigs_ptr, pczt_with_sigs_len) };
+        let pczt_with_sigs =
+            Pczt::parse(pczt_with_sigs_bytes).map_err(|e| anyhow!("Invalid PCZT: {:?}", e))?;
+
+        let spend_params = Path::new(OsStr::from_bytes(unsafe {
+            slice::from_raw_parts(spend_params, spend_params_len)
+        }));
+        let output_params = Path::new(OsStr::from_bytes(unsafe {
+            slice::from_raw_parts(output_params, output_params_len)
+        }));
+
+        let prover = LocalTxProver::new(spend_params, output_params);
+        let (spend_vk, output_vk) = prover.verifying_keys();
+
+        let pczt = Combiner::new(vec![pczt_with_proofs, pczt_with_sigs])
+            .combine()
+            .map_err(|e| anyhow!("Failed to combine PCZTs: {:?}", e))?;
+
+        let txid = extract_and_store_transaction_from_pczt::<_, ()>(
+            &mut db_data,
+            pczt,
+            &spend_vk,
+            &output_vk,
+            &orchard::circuit::VerifyingKey::build(),
+        )
+        .map_err(|e| anyhow!("Failed to extract transaction from PCZT: {:?}", e))?;
+
+        Ok(FfiBoxedSlice::some(txid.as_ref().to_vec()))
     });
     unwrap_exc_or_null(res)
 }

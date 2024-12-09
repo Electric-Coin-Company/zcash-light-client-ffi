@@ -7,8 +7,9 @@ use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 use std::slice;
+use zcash_client_backend::keys::UnifiedIncomingViewingKey;
 use zcash_primitives::consensus::NetworkConstants;
-use zip32::{arbitrary, ChildIndex};
+use zip32::{arbitrary, ChildIndex, DiversifierIndex};
 
 use zcash_address::{
     unified::{self, Container, Encoding},
@@ -313,13 +314,13 @@ pub unsafe extern "C" fn zcashlc_is_valid_unified_full_viewing_key(
 pub unsafe extern "C" fn zcashlc_derive_spending_key(
     seed: *const u8,
     seed_len: usize,
-    account: i32,
+    hd_account_index: i32,
     network_id: u32,
 ) -> *mut FfiBoxedSlice {
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let seed = unsafe { slice::from_raw_parts(seed, seed_len) };
-        let account = zip32_account_index(account)?;
+        let account = zip32_account_index(hd_account_index)?;
 
         UnifiedSpendingKey::from_seed(&network, seed, account)
             .map_err(|e| anyhow!("error generating unified spending key from seed: {:?}", e))
@@ -372,6 +373,90 @@ impl zcash_address::TryFromRawAddress for UnifiedAddressParser {
             .map(UnifiedAddressParser)
             .map_err(|e| anyhow!("Invalid Unified Address: {}", e).into())
     }
+}
+
+/// Derives a unified address address for the provided UFVK. If `diversifier_index_bytes` is null,
+/// the default address for the UFVK is returned.
+///
+/// # Safety
+///
+/// - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
+/// - `diversifier_index_bytes must either be null or be valid for reads for 11 bytes and have an
+///   alignment of `1`.
+/// - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+///   when done using it.
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_derive_address_ufvk(
+    network_id: u32,
+    ufvk: *const c_char,
+    diversifier_index_bytes: *const u8,
+) -> *mut c_char {
+    let res = catch_panic(|| {
+        let network = parse_network(network_id)?;
+        let ufvk_str = unsafe { CStr::from_ptr(ufvk).to_str()? };
+        let ufvk = UnifiedFullViewingKey::decode(&network, ufvk_str).map_err(|e| {
+            anyhow!(
+                "Value \"{}\" did not decode as a valid UFVK: {}",
+                ufvk_str,
+                e
+            )
+        })?;
+
+        let (ua, _) = if diversifier_index_bytes.is_null() {
+            ufvk.default_address(None)
+        } else {
+            let j = DiversifierIndex::from(<[u8; 11]>::try_from(unsafe {
+                slice::from_raw_parts(diversifier_index_bytes, 11)
+            })?);
+            ufvk.find_address(j, None)
+        }?;
+
+        let address_str = ua.encode(&network);
+        Ok(CString::new(address_str).unwrap().into_raw())
+    });
+    unwrap_exc_or_null(res)
+}
+
+/// Derives a unified address address for the provided UIVK. If `diversifier_index_bytes` is null,
+/// the default address for the UIVK is returned.
+///
+/// # Safety
+///
+/// - `uivk` must be non-null and must point to a null-terminated UTF-8 string.
+/// - `diversifier_index_bytes must either be null or be valid for reads for 11 bytes and have an
+///   alignment of `1`.
+/// - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+///   when done using it.
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_derive_address_uivk(
+    network_id: u32,
+    uivk: *const c_char,
+    diversifier_index_bytes: *const u8,
+) -> *mut c_char {
+    let res = catch_panic(|| {
+        let network = parse_network(network_id)?;
+        let uivk_str = unsafe { CStr::from_ptr(uivk).to_str()? };
+        let uivk = UnifiedIncomingViewingKey::decode(&network, uivk_str).map_err(|e| {
+            anyhow!(
+                "Value \"{}\" did not decode as a valid UIVK: {}",
+                uivk_str,
+                e
+            )
+        })?;
+
+        let (ua, _) = if diversifier_index_bytes.is_null() {
+            uivk.default_address(None)
+        } else {
+            let j = DiversifierIndex::from(<[u8; 11]>::try_from(unsafe {
+                slice::from_raw_parts(diversifier_index_bytes, 11)
+            })?);
+            uivk.find_address(j, None)
+        }?;
+
+        let address_str = ua.encode(&network);
+        Ok(CString::new(address_str).unwrap().into_raw())
+    });
+    unwrap_exc_or_null(res)
 }
 
 /// Returns the transparent receiver within the given Unified Address, if any.

@@ -6,32 +6,45 @@
 typedef struct TorRuntime TorRuntime;
 
 /**
- * A struct that contains details about an account in the wallet.
+ * A struct that contains a 16-byte account uuid along with key derivation metadata for that
+ * account.
+ *
+ * A returned value containing the all-zeros seed fingerprint and/or u32::MAX for the
+ * hd_account_index indicates that no derivation metadata is available.
  */
 typedef struct FfiAccount {
+  uint8_t uuid_bytes[16];
+  char *account_name;
+  char *key_source;
   uint8_t seed_fingerprint[32];
-  uint32_t account_index;
+  uint32_t hd_account_index;
 } FfiAccount;
 
 /**
+ * A struct that contains a 16-byte account uuid.
+ */
+typedef struct FfiUuid {
+  uint8_t uuid_bytes[16];
+} FfiUuid;
+
+/**
  * A struct that contains a pointer to, and length information for, a heap-allocated
- * slice of [`FfiAccount`] values.
+ * slice of [`FfiUuid`] values.
  *
  * # Safety
  *
- * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiAccount>()`
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiUuid>()`
  *   many bytes, and it must be properly aligned. This means in particular:
  *   - The entire memory range pointed to by `ptr` must be contained within a single allocated
  *     object. Slices can never span across multiple allocated objects.
  *   - `ptr` must be non-null and aligned even for zero-length slices.
  *   - `ptr` must point to `len` consecutive properly initialized values of type
- *     [`FfiAccount`].
- * - The total size `len * mem::size_of::<FfiAccount>()` of the slice pointed to
+ *     [`FfiUuid`].
+ * - The total size `len * mem::size_of::<FfiUuid>()` of the slice pointed to
  *   by `ptr` must be no larger than isize::MAX. See the safety documentation of pointer::offset.
- * - See the safety documentation of [`FfiAccount`]
  */
 typedef struct FfiAccounts {
-  struct FfiAccount *ptr;
+  struct FfiUuid *ptr;
   uintptr_t len;
 } FfiAccounts;
 
@@ -44,7 +57,7 @@ typedef struct FfiAccounts {
  * - `encoding` must be non-null and must point to an array of `encoding_len` bytes.
  */
 typedef struct FFIBinaryKey {
-  uint32_t account_id;
+  uint8_t account_uuid[16];
   uint8_t *encoding;
   uintptr_t encoding_len;
 } FFIBinaryKey;
@@ -58,7 +71,7 @@ typedef struct FFIBinaryKey {
  * - `encoding` must be non-null and must point to a null-terminated UTF-8 string.
  */
 typedef struct FFIEncodedKey {
-  uint32_t account_id;
+  uint8_t account_uuid[16];
   char *encoding;
 } FFIEncodedKey;
 
@@ -152,7 +165,7 @@ typedef struct FfiBalance {
  * The sum of this struct's fields is the total balance of the account.
  */
 typedef struct FfiAccountBalance {
-  uint32_t account_id;
+  uint8_t account_uuid[16];
   /**
    * The value of unspent Sapling outputs belonging to the account.
    */
@@ -460,6 +473,15 @@ typedef struct Decimal {
 } Decimal;
 
 /**
+ * A struct that contains a Zcash unified address, along with the diversifier index used to
+ * generate that address.
+ */
+typedef struct FfiAddress {
+  char *address;
+  uint8_t diversifier_index_bytes[11];
+} FfiAddress;
+
+/**
  * Initializes global Rust state, such as the logging infrastructure and threadpools.
  *
  * `log_level` defines how the Rust layer logs its events. These values are supported,
@@ -544,6 +566,15 @@ int32_t zcashlc_init_data_database(const uint8_t *db_data,
                                    uint32_t network_id);
 
 /**
+ * Frees a FfiAccount value
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`FfiAccount`].
+ */
+void zcashlc_free_account(struct FfiAccount *ptr);
+
+/**
  * Frees an array of FfiAccounts values as allocated by `zcashlc_list_accounts`.
  *
  * # Safety
@@ -570,6 +601,30 @@ void zcashlc_free_accounts(struct FfiAccounts *ptr);
 struct FfiAccounts *zcashlc_list_accounts(const uint8_t *db_data,
                                           uintptr_t db_data_len,
                                           uint32_t network_id);
+
+/**
+ * Returns the account data for the specified account identifier, or the [`FfiAccount::NOT_FOUND`]
+ * sentinel value if the account id does not correspond to an account in the wallet.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
+ * - Call [`zcashlc_free_account`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+struct FfiAccount *zcashlc_get_account(const uint8_t *db_data,
+                                       uintptr_t db_data_len,
+                                       uint32_t network_id,
+                                       const uint8_t *account_uuid_bytes);
 
 /**
  * Frees a FFIBinaryKey value
@@ -610,6 +665,11 @@ void zcashlc_free_binary_key(struct FFIBinaryKey *ptr);
  * - The memory referenced by `seed` must not be mutated for the duration of the function call.
  * - The total size `seed_len` must be no larger than `isize::MAX`. See the safety documentation
  *   of pointer::offset.
+ * - `treestate` must be non-null and valid for reads for `treestate_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `treestate` must not be mutated for the duration of the function call.
+ * - The total size `treestate_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
  * - Call [`zcashlc_free_binary_key`] to free the memory associated with the returned pointer when
  *   you are finished using it.
  *
@@ -622,7 +682,62 @@ struct FFIBinaryKey *zcashlc_create_account(const uint8_t *db_data,
                                             const uint8_t *treestate,
                                             uintptr_t treestate_len,
                                             int64_t recover_until,
-                                            uint32_t network_id);
+                                            uint32_t network_id,
+                                            const char *account_name,
+                                            const char *key_source);
+
+/**
+ * Frees a FfiUuid value
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`FfiUuid`].
+ */
+void zcashlc_free_ffi_uuid(struct FfiUuid *ptr);
+
+/**
+ * Adds a new account to the wallet by importing the UFVK that will be used to detect incoming
+ * payments.
+ *
+ * Derivation metadata may optionally be included. To indicate that no derivation metadata is
+ * available, the `seed_fingerprint` argument should be set to the null pointer and
+ * `hd_account_index` should be set to the value `u32::MAX`. Derivation metadata will not be
+ * stored unless both the seed fingerprint and the HD account index are provided.
+ *
+ * Returns the globally unique identifier for the account.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
+ * - `treestate` must be non-null and valid for reads for `treestate_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `treestate` must not be mutated for the duration of the function call.
+ * - The total size `treestate_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `seed_fingerprint` must either be either null or valid for reads for 32 bytes, and it must
+ *   have an alignment of `1`.
+ *
+ * - Call [`zcashlc_free_ffi_uuid`] to free the memory associated with the returned pointer when
+ *   you are finished using it.
+ */
+struct FfiUuid *zcashlc_import_account_ufvk(const uint8_t *db_data,
+                                            uintptr_t db_data_len,
+                                            const char *ufvk,
+                                            const uint8_t *treestate,
+                                            uintptr_t treestate_len,
+                                            int64_t recover_until,
+                                            uint32_t network_id,
+                                            uint32_t purpose,
+                                            const char *account_name,
+                                            const char *key_source,
+                                            const uint8_t *seed_fingerprint,
+                                            uint32_t hd_account_index_raw);
 
 /**
  * Checks whether the given seed is relevant to any of the accounts in the wallet.
@@ -673,12 +788,16 @@ void zcashlc_free_keys(struct FFIEncodedKeys *ptr);
  * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
  * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
  *   when done using it.
  */
 char *zcashlc_get_current_address(const uint8_t *db_data,
                                   uintptr_t db_data_len,
-                                  int32_t account,
+                                  const uint8_t *account_uuid_bytes,
                                   uint32_t network_id);
 
 /**
@@ -693,12 +812,16 @@ char *zcashlc_get_current_address(const uint8_t *db_data,
  * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
  * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
  *   when done using it.
  */
 char *zcashlc_get_next_available_address(const uint8_t *db_data,
                                          uintptr_t db_data_len,
-                                         int32_t account,
+                                         const uint8_t *account_uuid_bytes,
                                          uint32_t network_id);
 
 /**
@@ -713,12 +836,16 @@ char *zcashlc_get_next_available_address(const uint8_t *db_data,
  * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
  * - Call [`zcashlc_free_keys`] to free the memory associated with the returned pointer
  *   when done using it.
  */
 struct FFIEncodedKeys *zcashlc_list_transparent_receivers(const uint8_t *db_data,
                                                           uintptr_t db_data_len,
-                                                          int32_t account_id,
+                                                          const uint8_t *account_uuid_bytes,
                                                           uint32_t network_id);
 
 /**
@@ -754,13 +881,15 @@ int64_t zcashlc_get_verified_transparent_balance(const uint8_t *db_data,
  * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
- * - `address` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `address` must not be mutated for the duration of the function call.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
  */
 int64_t zcashlc_get_verified_transparent_balance_for_account(const uint8_t *db_data,
                                                              uintptr_t db_data_len,
                                                              uint32_t network_id,
-                                                             int32_t account,
+                                                             const uint8_t *account_uuid_bytes,
                                                              uint32_t min_confirmations);
 
 /**
@@ -793,13 +922,15 @@ int64_t zcashlc_get_total_transparent_balance(const uint8_t *db_data,
  * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
- * - `address` must be non-null and must point to a null-terminated UTF-8 string.
- * - The memory referenced by `address` must not be mutated for the duration of the function call.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
  */
 int64_t zcashlc_get_total_transparent_balance_for_account(const uint8_t *db_data,
                                                           uintptr_t db_data_len,
                                                           uint32_t network_id,
-                                                          int32_t account);
+                                                          const uint8_t *account_uuid_bytes);
 
 /**
  * Returns the memo for a note by copying the corresponding bytes to the received
@@ -824,28 +955,6 @@ bool zcashlc_get_memo(const uint8_t *db_data,
                       uint16_t output_index,
                       uint8_t *memo_bytes_ret,
                       uint32_t network_id);
-
-/**
- * Returns the memo for a note, if it is known and a valid UTF-8 string.
- *
- * # Safety
- *
- * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
- *   alignment of `1`. Its contents must be a string representing a valid system path in the
- *   operating system's preferred representation.
- * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
- * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
- *   documentation of pointer::offset.
- * - `txid_bytes` must be non-null and valid for reads for 32 bytes, and it must have an alignment
- *   of `1`.
- * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
- *   when done using it.
- */
-char *zcashlc_get_memo_as_utf8(const uint8_t *db_data,
-                               uintptr_t db_data_len,
-                               const uint8_t *txid_bytes,
-                               uint16_t output_index,
-                               uint32_t network_id);
 
 /**
  * Returns a ZIP-32 signature of the given seed bytes.
@@ -1185,8 +1294,8 @@ bool zcashlc_init_block_metadata_db(const uint8_t *fs_block_db_root,
  * - The total size `fs_block_db_root_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  * - Block metadata represented in `blocks_meta` must be non-null. Caller must guarantee that the
- * memory reference by this pointer is not freed up, dereferenced or invalidated while this function
- * is invoked.
+ *   memory reference by this pointer is not freed up, dereferenced or invalidated while this
+ *   function is invoked.
  */
 bool zcashlc_write_block_metadata(const uint8_t *fs_block_db_root,
                                   uintptr_t fs_block_db_root_len,
@@ -1280,6 +1389,10 @@ void zcashlc_free_boxed_slice(struct FfiBoxedSlice *ptr);
  * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an alignment
+ *    of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
  * - `to` must be non-null and must point to a null-terminated UTF-8 string.
  * - `memo` must either be null (indicating an empty memo or a transparent recipient) or point to a
  *    512-byte array.
@@ -1288,7 +1401,7 @@ void zcashlc_free_boxed_slice(struct FfiBoxedSlice *ptr);
  */
 struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
                                                uintptr_t db_data_len,
-                                               int32_t account,
+                                               const uint8_t *account_uuid_bytes,
                                                const char *to,
                                                int64_t value,
                                                const uint8_t *memo,
@@ -1308,6 +1421,10 @@ struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
  * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an alignment
+ *    of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
  * - `payment_uri` must be non-null and must point to a null-terminated UTF-8 string.
  * - `network_id` a u32. 0 for Testnet and 1 for Mainnet
  * - `min_confirmations` number of confirmations of the funds to spend
@@ -1317,7 +1434,7 @@ struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
  */
 struct FfiBoxedSlice *zcashlc_propose_transfer_from_uri(const uint8_t *db_data,
                                                         uintptr_t db_data_len,
-                                                        int32_t account,
+                                                        const uint8_t *account_uuid_bytes,
                                                         const char *payment_uri,
                                                         uint32_t network_id,
                                                         uint32_t min_confirmations);
@@ -1346,13 +1463,17 @@ void zcashlc_string_free(char *s);
  * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an alignment
+ *    of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
  * - `shielding_threshold` a non-negative shielding threshold amount in zatoshi
  * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
  *   pointer when done using it.
  */
 struct FfiBoxedSlice *zcashlc_propose_shielding(const uint8_t *db_data,
                                                 uintptr_t db_data_len,
-                                                int32_t account,
+                                                const uint8_t *account_uuid_bytes,
                                                 const uint8_t *memo,
                                                 uint64_t shielding_threshold,
                                                 const char *transparent_receiver,
@@ -1379,6 +1500,14 @@ void zcashlc_free_txids(struct FfiTxIds *ptr);
  * Do not call this multiple times in parallel, or you will generate transactions that
  * double-spend the same notes.
  *
+ * # Parameters
+ * - `spend_params`: A pointer to a buffer containing the operating system path of the Sapling
+ *   spend proving parameters, in the operating system's preferred path representation.
+ * - `spend_params_len`: the length of the `spend_params` buffer.
+ * - `output_params`: A pointer to a buffer containing the operating system path of the Sapling
+ *   output proving parameters, in the operating system's preferred path representation.
+ * - `output_params_len`: the length of the `output_params` buffer.
+ *
  * # Safety
  *
  * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must
@@ -1401,19 +1530,14 @@ void zcashlc_free_txids(struct FfiTxIds *ptr);
  *   function call.
  * - The total size `usk_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of `pointer::offset`.
- * - `to` must be non-null and must point to a null-terminated UTF-8 string.
- * - `memo` must either be null (indicating an empty memo or a transparent recipient) or
- *   point to a 512-byte array.
  * - `spend_params` must be non-null and valid for reads for `spend_params_len` bytes,
- *   and it must have an alignment of `1`. Its contents must be the Sapling spend proving
- *   parameters.
+ *   and it must have an alignment of `1`.
  * - The memory referenced by `spend_params` must not be mutated for the duration of the
  *   function call.
  * - The total size `spend_params_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of `pointer::offset`.
  * - `output_params` must be non-null and valid for reads for `output_params_len` bytes,
- *   and it must have an alignment of `1`. Its contents must be the Sapling output
- *   proving parameters.
+ *   and it must have an alignment of `1`.
  * - The memory referenced by `output_params` must not be mutated for the duration of the
  *   function call.
  * - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
@@ -1430,6 +1554,165 @@ struct FfiTxIds *zcashlc_create_proposed_transactions(const uint8_t *db_data,
                                                       const uint8_t *output_params,
                                                       uintptr_t output_params_len,
                                                       uint32_t network_id);
+
+/**
+ * Creates a partially-constructed (unsigned without proofs) transaction from the given proposal.
+ *
+ * Returns the partially constructed transaction in the `postcard` format generated by the `pczt`
+ * crate.
+ *
+ * Do not call this multiple times in parallel, or you will generate pczt instances that, if
+ * finalized, would double-spend the same notes.
+ *
+ * # Parameters
+ * - `db_data`: A pointer to a buffer containing the operating system path of the wallet database,
+ *   in the operating system's preferred path representation.
+ * - `db_data_len`: The length of the `db_data` buffer.
+ * - `proposal_ptr`: A pointer to a buffer containing an encoded `Proposal` protobuf.
+ * - `proposal_len`: The length of the `proposal_ptr` buffer.
+ * - `account_uuid_bytes`: A pointer to the 16-byte representaion of the account UUID.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `proposal_ptr` must be non-null and valid for reads for `proposal_len` bytes, and it
+ *   must have an alignment of `1`.
+ * - The memory referenced by `proposal_ptr` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `proposal_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_create_pczt_from_proposal(const uint8_t *db_data,
+                                                        uintptr_t db_data_len,
+                                                        uint32_t network_id,
+                                                        const uint8_t *proposal_ptr,
+                                                        uintptr_t proposal_len,
+                                                        const uint8_t *account_uuid_bytes);
+
+/**
+ * Adds proofs to the given PCZT.
+ *
+ * Returns the updated PCZT in its serialized format.
+ *
+ * # Parameters
+ * - `pczt_ptr`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction for which proofs will be computed.
+ * - `pczt_len`: The length of the `pczt_ptr` buffer.
+ * - `spend_params`: A pointer to a buffer containing the operating system path of the Sapling
+ *   spend proving parameters, in the operating system's preferred path representation.
+ * - `spend_params_len`: the length of the `spend_params` buffer.
+ * - `output_params`: A pointer to a buffer containing the operating system path of the Sapling
+ *   output proving parameters, in the operating system's preferred path representation.
+ * - `output_params_len`: the length of the `output_params` buffer.
+ *
+ * # Safety
+ *
+ * - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `pczt_ptr` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - `spend_params` must be non-null and valid for reads for `spend_params_len` bytes, and it must
+ *   have an alignment of `1`.
+ * - The memory referenced by `spend_params` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `spend_params_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `output_params` must be non-null and valid for reads for `output_params_len` bytes, and it
+ *   must have an alignment of `1`.
+ * - The memory referenced by `output_params` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_add_proofs_to_pczt(const uint8_t *pczt_ptr,
+                                                 uintptr_t pczt_len,
+                                                 const uint8_t *spend_params,
+                                                 uintptr_t spend_params_len,
+                                                 const uint8_t *output_params,
+                                                 uintptr_t output_params_len);
+
+/**
+ * Takes a PCZT that has been separately proven and signed, finalizes it, and stores it
+ * in the wallet.
+ *
+ * Returns the txid of the completed transaction as a byte array.
+ *
+ * # Parameters
+ * - `db_data`: A pointer to a buffer containing the operating system path of the wallet database,
+ *   in the operating system's preferred path representation.
+ * - `db_data_len`: The length of the `db_data` buffer.
+ * - `pczt_with_proofs`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction to which proofs have been added.
+ * - `pczt_with_proofs_len`: The length of the `pczt_with_proofs` buffer.
+ * - `pczt_with_sigs_ptr`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction to which signatures have been added.
+ * - `pczt_with_sigs_len`: The length of the `pczt_with_sigs` buffer.
+ * - `spend_params`: A pointer to a buffer containing the operating system path of the Sapling
+ *   spend proving parameters, in the operating system's preferred path representation.
+ * - `spend_params_len`: the length of the `spend_params` buffer.
+ * - `output_params`: A pointer to a buffer containing the operating system path of the Sapling
+ *   output proving parameters, in the operating system's preferred path representation.
+ * - `output_params_len`: the length of the `output_params` buffer.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `pczt_with_proofs_ptr` must be non-null and valid for reads for `pczt_with_proofs_len` bytes,
+ *   and it must have an alignment of `1`.
+ * - The memory referenced by `pczt_with_proofs_ptr` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `pczt_with_proofs_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `pczt_with_sigs_ptr` must be non-null and valid for reads for `pczt_with_sigs_len` bytes, and
+ *   it must have an alignment of `1`.
+ * - The memory referenced by `pczt_with_sigs_ptr` must not be mutated for the duration of the
+ *   function call.
+ * - The total size `pczt_with_sigs_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `spend_params` must be non-null and valid for reads for `spend_params_len` bytes, and it must
+ *   have an alignment of `1`.
+ * - The memory referenced by `spend_params` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `spend_params_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of `pointer::offset`.
+ * - `output_params` must be non-null and valid for reads for `output_params_len` bytes, and it
+ *   must have an alignment of `1`.
+ * - The memory referenced by `output_params` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_extract_and_store_from_pczt(const uint8_t *db_data,
+                                                          uintptr_t db_data_len,
+                                                          uint32_t network_id,
+                                                          const uint8_t *pczt_with_proofs_ptr,
+                                                          uintptr_t pczt_with_proofs_len,
+                                                          const uint8_t *pczt_with_sigs_ptr,
+                                                          uintptr_t pczt_with_sigs_len,
+                                                          const uint8_t *spend_params,
+                                                          uintptr_t spend_params_len,
+                                                          const uint8_t *output_params,
+                                                          uintptr_t output_params_len);
 
 /**
  * Sets the transaction status to the provided value.
@@ -1626,10 +1909,10 @@ bool zcashlc_is_valid_unified_full_viewing_key(const char *ufvk, uint32_t networ
  * - Call `zcashlc_free_binary_key` to free the memory associated with the returned pointer when
  *   you are finished using it.
  */
-struct FFIBinaryKey *zcashlc_derive_spending_key(const uint8_t *seed,
-                                                 uintptr_t seed_len,
-                                                 int32_t account,
-                                                 uint32_t network_id);
+struct FfiBoxedSlice *zcashlc_derive_spending_key(const uint8_t *seed,
+                                                  uintptr_t seed_len,
+                                                  int32_t hd_account_index,
+                                                  uint32_t network_id);
 
 /**
  * Obtains the unified full viewing key for the given binary-encoded unified spending key
@@ -1649,6 +1932,51 @@ struct FFIBinaryKey *zcashlc_derive_spending_key(const uint8_t *seed,
 char *zcashlc_spending_key_to_full_viewing_key(const uint8_t *usk_ptr,
                                                uintptr_t usk_len,
                                                uint32_t network_id);
+
+/**
+ * Frees a FfiAddress value
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`FfiAddress`].
+ */
+void zcashlc_free_ffi_address(struct FfiAddress *ptr);
+
+/**
+ * Derives a unified address address for the provided UFVK, along with the diversifier at which it
+ * was derived; this may not be equal to the provided diversifier index if no valid Sapling
+ * address could be derived at that index. If the `diversifier_index_bytes` parameter is null, the
+ * default address for the UFVK is returned.
+ *
+ * # Safety
+ *
+ * - `ufvk` must be non-null and must point to a null-terminated UTF-8 string.
+ * - `diversifier_index_bytes must either be null or be valid for reads for 11 bytes and have an
+ *   alignment of `1`.
+ * - Call [`zcashlc_free_ffi_address`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+struct FfiAddress *zcashlc_derive_address_from_ufvk(uint32_t network_id,
+                                                    const char *ufvk,
+                                                    const uint8_t *diversifier_index_bytes);
+
+/**
+ * Derives a unified address address for the provided UIVK, along with the diversifier at which it
+ * was derived; this may not be equal to the provided diversifier index if no valid Sapling
+ * address could be derived at that index. If the `diversifier_index_bytes` parameter is null, the
+ * default address for the UIVK is returned.
+ *
+ * # Safety
+ *
+ * - `uivk` must be non-null and must point to a null-terminated UTF-8 string.
+ * - `diversifier_index_bytes must either be null or be valid for reads for 11 bytes and have an
+ *   alignment of `1`.
+ * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+struct FfiAddress *zcashlc_derive_address_from_uivk(uint32_t network_id,
+                                                    const char *uivk,
+                                                    const uint8_t *diversifier_index_bytes);
 
 /**
  * Returns the transparent receiver within the given Unified Address, if any.

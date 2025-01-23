@@ -51,13 +51,13 @@ pub struct AppleOsLogWriter<'a> {
     message: Buffer,
 }
 
-impl<'a> Drop for AppleOsLogWriter<'a> {
+impl Drop for AppleOsLogWriter<'_> {
     fn drop(&mut self) {
         self.flush().unwrap();
     }
 }
 
-impl<'a> io::Write for AppleOsLogWriter<'a> {
+impl io::Write for AppleOsLogWriter<'_> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.message.write(buf);
         Ok(buf.len())

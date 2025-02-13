@@ -6,6 +6,7 @@ on:
       - 'feature/**'
       - 'release/**'
       - 'hotfix/**'
+  workflow_dispatch:
 
 jobs:
   build:

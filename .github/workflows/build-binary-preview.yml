@@ -3,6 +3,7 @@ name: Binary preview
 on:
   push:
     branches:
+      - 'feature/**'
       - 'release/**'
       - 'hotfix/**'
 

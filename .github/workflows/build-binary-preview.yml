@@ -49,3 +49,4 @@ jobs:
         with:
           commit_message: 'make xcframework'
           branch: 'preview/${{ github.ref_name }}'
+          create_branch: true

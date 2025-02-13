@@ -1,0 +1,4 @@
+rules:
+  cache-poisoning:
+    ignore:
+      - build-binary-preview.yml

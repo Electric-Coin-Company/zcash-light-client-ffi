@@ -3,6 +3,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+typedef struct LwdConn LwdConn;
+
 typedef struct TorRuntime TorRuntime;
 
 /**
@@ -1600,6 +1602,49 @@ struct FfiBoxedSlice *zcashlc_create_pczt_from_proposal(const uint8_t *db_data,
                                                         const uint8_t *account_uuid_bytes);
 
 /**
+ * Redacts information from the given PCZT that is unnecessary for the Signer role.
+ *
+ * Returns the updated PCZT in its serialized format.
+ *
+ * # Parameters
+ * - `pczt_ptr`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction to be redacted.
+ * - `pczt_len`: The length of the `pczt_ptr` buffer.
+ *
+ * # Safety
+ *
+ * - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `pczt_ptr` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_redact_pczt_for_signer(const uint8_t *pczt_ptr, uintptr_t pczt_len);
+
+/**
+ * Returns `true` if this PCZT requires Sapling proofs (and thus the caller needs to have
+ * downloaded them).
+ *
+ * # Parameters
+ * - `pczt_ptr`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction to be redacted.
+ * - `pczt_len`: The length of the `pczt_ptr` buffer.
+ *
+ * # Safety
+ *
+ * - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `pczt_ptr` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ */
+bool zcashlc_pczt_requires_sapling_proofs(const uint8_t *pczt_ptr, uintptr_t pczt_len);
+
+/**
  * Adds proofs to the given PCZT.
  *
  * Returns the updated PCZT in its serialized format.
@@ -1795,6 +1840,29 @@ struct TorRuntime *zcashlc_create_tor_runtime(const uint8_t *tor_dir, uintptr_t 
 void zcashlc_free_tor_runtime(struct TorRuntime *ptr);
 
 /**
+ * Returns a new isolated `TorRuntime` handle.
+ *
+ * The two `TorRuntime`s will share internal state and configuration, but their streams
+ * will never share circuits with one another.
+ *
+ * Use this method when you want separate parts of your program to each have a
+ * `TorRuntime` handle, but where you don't want their activities to be linkable to one
+ * another over the Tor network.
+ *
+ * Calling this method is usually preferable to creating a completely separate
+ * `TorRuntime` instance, since it can share its internals with the existing `TorRuntime`.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be non-null and point to a struct having the layout of
+ *   [`TorRuntime`].
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ * - Call [`zcashlc_free_tor_runtime`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct TorRuntime *zcashlc_tor_isolated_client(struct TorRuntime *tor_runtime);
+
+/**
  * Fetches the current ZEC-USD exchange rate over Tor.
  *
  * The result is a [`Decimal`] struct containing the fields necessary to construct an
@@ -1809,6 +1877,66 @@ void zcashlc_free_tor_runtime(struct TorRuntime *ptr);
  * - `tor_runtime` must not be passed to two FFI calls at the same time.
  */
 struct Decimal zcashlc_get_exchange_rate_usd(struct TorRuntime *tor_runtime);
+
+/**
+ * Connects to the lightwalletd server at the given endpoint.
+ *
+ * Each connection returned by this method is isolated from any other Tor usage.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be non-null and point to a struct having the layout of
+ *   [`TorRuntime`].
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ * - `endpoint` must be non-null and must point to a null-terminated UTF-8 string.
+ * - Call [`zcashlc_free_tor_lwd_conn`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct LwdConn *zcashlc_tor_connect_to_lightwalletd(struct TorRuntime *tor_runtime,
+                                                    const char *endpoint);
+
+/**
+ * Frees a Tor lightwalletd connection.
+ *
+ * # Safety
+ *
+ * - If `ptr` is non-null, it must point to a struct having the layout of [`tor::LwdConn`].
+ */
+void zcashlc_free_tor_lwd_conn(struct LwdConn *ptr);
+
+/**
+ * Fetches the transaction with the given ID.
+ *
+ * # Safety
+ *
+ * - `lwd_conn` must be non-null and point to a struct having the layout of
+ *   [`tor::LwdConn`].
+ * - `lwd_conn` must not be passed to two FFI calls at the same time.
+ * - `txid_bytes` must be non-null and valid for reads for 32 bytes, and it must have an alignment
+ *   of `1`.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_tor_lwd_conn_fetch_transaction(struct LwdConn *lwd_conn,
+                                                             const uint8_t *txid_bytes);
+
+/**
+ * Submits a transaction to the Zcash network via the given lightwalletd connection.
+ *
+ * # Safety
+ *
+ * - `lwd_conn` must be non-null and point to a struct having the layout of
+ *   [`tor::LwdConn`].
+ * - `lwd_conn` must not be passed to two FFI calls at the same time.
+ * - `tx` must be non-null and valid for reads for `tx_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `tx` must not be mutated for the duration of the function call.
+ * - The total size `tx_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ */
+bool zcashlc_tor_lwd_conn_submit_transaction(struct LwdConn *lwd_conn,
+                                             const uint8_t *tx,
+                                             uintptr_t tx_len);
 
 /**
  * Returns the network type and address kind for the given address string,

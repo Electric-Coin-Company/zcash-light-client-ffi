@@ -3548,6 +3548,46 @@ pub unsafe extern "C" fn zcashlc_free_tor_runtime(ptr: *mut TorRuntime) {
     }
 }
 
+/// Returns a new isolated `TorRuntime` handle.
+///
+/// The two `TorRuntime`s will share internal state and configuration, but their streams
+/// will never share circuits with one another.
+///
+/// Use this method when you want separate parts of your program to each have a
+/// `TorRuntime` handle, but where you don't want their activities to be linkable to one
+/// another over the Tor network.
+///
+/// Calling this method is usually preferable to creating a completely separate
+/// `TorRuntime` instance, since it can share its internals with the existing `TorRuntime`.
+///
+/// # Safety
+///
+/// - `tor_runtime` must be non-null and point to a struct having the layout of
+///   [`TorRuntime`].
+/// - `tor_runtime` must not be passed to two FFI calls at the same time.
+/// - Call [`zcashlc_free_tor_runtime`] to free the memory associated with the returned
+///   pointer when done using it.
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_tor_isolated_client(
+    tor_runtime: *mut TorRuntime,
+) -> *mut TorRuntime {
+    // SAFETY: We ensure unwind safety by:
+    // - using `*mut TorRuntime` and respecting mutability rules on the Swift side, to
+    //   avoid observing the effects of a panic in another thread.
+    // - discarding the `TorRuntime` whenever we get an error that is due to a panic.
+    let tor_runtime = AssertUnwindSafe(tor_runtime);
+
+    let res = catch_panic(|| {
+        let tor_runtime =
+            unsafe { tor_runtime.as_mut() }.ok_or_else(|| anyhow!("A Tor runtime is required"))?;
+
+        let isolated_client = tor_runtime.isolated_client();
+
+        Ok(Box::into_raw(Box::new(isolated_client)))
+    });
+    unwrap_exc_or_null(res)
+}
+
 /// A decimal suitable for converting into an `NSDecimalNumber`.
 #[repr(C)]
 pub struct Decimal {

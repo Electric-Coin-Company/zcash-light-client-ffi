@@ -1600,6 +1600,49 @@ struct FfiBoxedSlice *zcashlc_create_pczt_from_proposal(const uint8_t *db_data,
                                                         const uint8_t *account_uuid_bytes);
 
 /**
+ * Redacts information from the given PCZT that is unnecessary for the Signer role.
+ *
+ * Returns the updated PCZT in its serialized format.
+ *
+ * # Parameters
+ * - `pczt_ptr`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction to be redacted.
+ * - `pczt_len`: The length of the `pczt_ptr` buffer.
+ *
+ * # Safety
+ *
+ * - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `pczt_ptr` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_redact_pczt_for_signer(const uint8_t *pczt_ptr, uintptr_t pczt_len);
+
+/**
+ * Returns `true` if this PCZT requires Sapling proofs (and thus the caller needs to have
+ * downloaded them).
+ *
+ * # Parameters
+ * - `pczt_ptr`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction to be redacted.
+ * - `pczt_len`: The length of the `pczt_ptr` buffer.
+ *
+ * # Safety
+ *
+ * - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `pczt_ptr` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ */
+bool zcashlc_pczt_requires_sapling_proofs(const uint8_t *pczt_ptr, uintptr_t pczt_len);
+
+/**
  * Adds proofs to the given PCZT.
  *
  * Returns the updated PCZT in its serialized format.

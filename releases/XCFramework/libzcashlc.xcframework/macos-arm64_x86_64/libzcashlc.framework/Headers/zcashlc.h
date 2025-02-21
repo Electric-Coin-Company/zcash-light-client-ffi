@@ -6,6 +6,34 @@
 typedef struct TorRuntime TorRuntime;
 
 /**
+ * A struct that contains a 16-byte account uuid.
+ */
+typedef struct FfiUuid {
+  uint8_t uuid_bytes[16];
+} FfiUuid;
+
+/**
+ * A struct that contains a pointer to, and length information for, a heap-allocated
+ * slice of [`Uuid`] values.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<Uuid>()`
+ *   many bytes, and it must be properly aligned. This means in particular:
+ *   - The entire memory range pointed to by `ptr` must be contained within a single allocated
+ *     object. Slices can never span across multiple allocated objects.
+ *   - `ptr` must be non-null and aligned even for zero-length slices.
+ *   - `ptr` must point to `len` consecutive properly initialized values of type
+ *     [`Uuid`].
+ * - The total size `len * mem::size_of::<Uuid>()` of the slice pointed to
+ *   by `ptr` must be no larger than isize::MAX. See the safety documentation of pointer::offset.
+ */
+typedef struct FfiAccounts {
+  struct FfiUuid *ptr;
+  uintptr_t len;
+} FfiAccounts;
+
+/**
  * A struct that contains a 16-byte account uuid along with key derivation metadata for that
  * account.
  *
@@ -19,34 +47,6 @@ typedef struct FfiAccount {
   uint8_t seed_fingerprint[32];
   uint32_t hd_account_index;
 } FfiAccount;
-
-/**
- * A struct that contains a 16-byte account uuid.
- */
-typedef struct FfiUuid {
-  uint8_t uuid_bytes[16];
-} FfiUuid;
-
-/**
- * A struct that contains a pointer to, and length information for, a heap-allocated
- * slice of [`FfiUuid`] values.
- *
- * # Safety
- *
- * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiUuid>()`
- *   many bytes, and it must be properly aligned. This means in particular:
- *   - The entire memory range pointed to by `ptr` must be contained within a single allocated
- *     object. Slices can never span across multiple allocated objects.
- *   - `ptr` must be non-null and aligned even for zero-length slices.
- *   - `ptr` must point to `len` consecutive properly initialized values of type
- *     [`FfiUuid`].
- * - The total size `len * mem::size_of::<FfiUuid>()` of the slice pointed to
- *   by `ptr` must be no larger than isize::MAX. See the safety documentation of pointer::offset.
- */
-typedef struct FfiAccounts {
-  struct FfiUuid *ptr;
-  uintptr_t len;
-} FfiAccounts;
 
 /**
  * A struct that contains an account identifier along with a pointer to the binary encoding
@@ -77,20 +77,20 @@ typedef struct FFIEncodedKey {
 
 /**
  * A struct that contains a pointer to, and length information for, a heap-allocated
- * slice of [`FFIEncodedKey`] values.
+ * slice of [`EncodedKey`] values.
  *
  * # Safety
  *
- * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FFIEncodedKey>()`
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<EncodedKey>()`
  *   many bytes, and it must be properly aligned. This means in particular:
  *   - The entire memory range pointed to by `ptr` must be contained within a single allocated
  *     object. Slices can never span across multiple allocated objects.
  *   - `ptr` must be non-null and aligned even for zero-length slices.
  *   - `ptr` must point to `len` consecutive properly initialized values of type
- *     [`FFIEncodedKey`].
- * - The total size `len * mem::size_of::<FFIEncodedKey>()` of the slice pointed to
+ *     [`EncodedKey`].
+ * - The total size `len * mem::size_of::<EncodedKey>()` of the slice pointed to
  *   by `ptr` must be no larger than isize::MAX. See the safety documentation of pointer::offset.
- * - See the safety documentation of [`FFIEncodedKey`]
+ * - See the safety documentation of [`EncodedKey`]
  */
 typedef struct FFIEncodedKeys {
   struct FFIEncodedKey *ptr;
@@ -115,21 +115,21 @@ typedef struct FfiSubtreeRoot {
 
 /**
  * A struct that contains a pointer to, and length information for, a heap-allocated
- * slice of [`FfiSubtreeRoot`] values.
+ * slice of [`SubtreeRoot`] values.
  *
  * # Safety
  *
- * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiSubtreeRoot>()`
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<SubtreeRoot>()`
  *   many bytes, and it must be properly aligned. This means in particular:
  *   - The entire memory range pointed to by `ptr` must be contained within a single
  *     allocated object. Slices can never span across multiple allocated objects.
  *   - `ptr` must be non-null and aligned even for zero-length slices.
  *   - `ptr` must point to `len` consecutive properly initialized values of type
- *     [`FfiSubtreeRoot`].
- * - The total size `len * mem::size_of::<FfiSubtreeRoot>()` of the slice pointed to
+ *     [`SubtreeRoot`].
+ * - The total size `len * mem::size_of::<SubtreeRoot>()` of the slice pointed to
  *   by `ptr` must be no larger than isize::MAX. See the safety documentation of
  *   `pointer::offset`.
- * - See the safety documentation of [`FfiSubtreeRoot`]
+ * - See the safety documentation of [`SubtreeRoot`]
  */
 typedef struct FfiSubtreeRoots {
   struct FfiSubtreeRoot *ptr;
@@ -211,18 +211,18 @@ typedef struct FfiScanProgress {
  * # Safety
  *
  * - `account_balances` must be non-null and must be valid for reads for
- *   `account_balances_len * mem::size_of::<FfiAccountBalance>()` many bytes, and it must
+ *   `account_balances_len * mem::size_of::<AccountBalance>()` many bytes, and it must
  *   be properly aligned. This means in particular:
  *   - The entire memory range pointed to by `account_balances` must be contained within
  *     a single allocated object. Slices can never span across multiple allocated objects.
  *   - `account_balances` must be non-null and aligned even for zero-length slices.
  *   - `account_balances` must point to `len` consecutive properly initialized values of
- *     type [`FfiAccountBalance`].
- * - The total size `account_balances_len * mem::size_of::<FfiAccountBalance>()` of the
+ *     type [`AccountBalance`].
+ * - The total size `account_balances_len * mem::size_of::<AccountBalance>()` of the
  *   slice pointed to by `account_balances` must be no larger than `isize::MAX`. See the
  *   safety documentation of `pointer::offset`.
  * - `scan_progress` must, if non-null, point to a struct having the layout of
- *   [`FfiScanProgress`].
+ *   [`ScanProgress`].
  */
 typedef struct FfiWalletSummary {
   struct FfiAccountBalance *account_balances;
@@ -246,18 +246,18 @@ typedef struct FfiScanRange {
 
 /**
  * A struct that contains a pointer to, and length information for, a heap-allocated
- * slice of [`FfiScanRange`] values.
+ * slice of [`ScanRange`] values.
  *
  * # Safety
  *
- * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiScanRange>()`
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<ScanRange>()`
  *   many bytes, and it must be properly aligned. This means in particular:
  *   - The entire memory range pointed to by `ptr` must be contained within a single
  *     allocated object. Slices can never span across multiple allocated objects.
  *   - `ptr` must be non-null and aligned even for zero-length slices.
  *   - `ptr` must point to `len` consecutive properly initialized values of type
- *     [`FfiScanRange`].
- * - The total size `len * mem::size_of::<FfiScanRange>()` of the slice pointed to
+ *     [`ScanRange`].
+ * - The total size `len * mem::size_of::<ScanRange>()` of the slice pointed to
  *   by `ptr` must be no larger than isize::MAX. See the safety documentation of
  *   `pointer::offset`.
  */
@@ -443,20 +443,20 @@ typedef struct FfiTransactionDataRequest {
 
 /**
  * A struct that contains a pointer to, and length information for, a heap-allocated
- * slice of [`FfiTransactionDataRequest`] values.
+ * slice of [`TransactionDataRequest`] values.
  *
  * # Safety
  *
- * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<FfiTransactionDataRequest>()`
+ * - `ptr` must be non-null and must be valid for reads for `len * mem::size_of::<TransactionDataRequest>()`
  *   many bytes, and it must be properly aligned. This means in particular:
  *   - The entire memory range pointed to by `ptr` must be contained within a single allocated
  *     object. Slices can never span across multiple allocated objects.
  *   - `ptr` must be non-null and aligned even for zero-length slices.
  *   - `ptr` must point to `len` consecutive properly initialized values of type
- *     [`FfiTransactionDataRequest`].
- * - The total size `len * mem::size_of::<FfiTransactionDataRequest>()` of the slice pointed to
+ *     [`TransactionDataRequest`].
+ * - The total size `len * mem::size_of::<TransactionDataRequest>()` of the slice pointed to
  *   by `ptr` must be no larger than isize::MAX. See the safety documentation of pointer::offset.
- * - See the safety documentation of [`FfiTransactionDataRequest`]
+ * - See the safety documentation of [`TransactionDataRequest`]
  */
 typedef struct FfiTransactionDataRequests {
   struct FfiTransactionDataRequest *ptr;
@@ -566,25 +566,6 @@ int32_t zcashlc_init_data_database(const uint8_t *db_data,
                                    uint32_t network_id);
 
 /**
- * Frees a FfiAccount value
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FfiAccount`].
- */
-void zcashlc_free_account(struct FfiAccount *ptr);
-
-/**
- * Frees an array of FfiAccounts values as allocated by `zcashlc_list_accounts`.
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FfiAccounts`].
- *   See the safety documentation of [`FfiAccounts`].
- */
-void zcashlc_free_accounts(struct FfiAccounts *ptr);
-
-/**
  * Returns a list of the accounts in the wallet.
  *
  * # Safety
@@ -603,7 +584,7 @@ struct FfiAccounts *zcashlc_list_accounts(const uint8_t *db_data,
                                           uint32_t network_id);
 
 /**
- * Returns the account data for the specified account identifier, or the [`FfiAccount::NOT_FOUND`]
+ * Returns the account data for the specified account identifier, or the [`ffi::Account::NOT_FOUND`]
  * sentinel value if the account id does not correspond to an account in the wallet.
  *
  * # Safety
@@ -625,16 +606,6 @@ struct FfiAccount *zcashlc_get_account(const uint8_t *db_data,
                                        uintptr_t db_data_len,
                                        uint32_t network_id,
                                        const uint8_t *account_uuid_bytes);
-
-/**
- * Frees a FFIBinaryKey value
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FFIBinaryKey`].
- *   See the safety documentation of [`FFIBinaryKey`].
- */
-void zcashlc_free_binary_key(struct FFIBinaryKey *ptr);
 
 /**
  * Adds the next available account-level spend authority, given the current set of [ZIP 316]
@@ -685,15 +656,6 @@ struct FFIBinaryKey *zcashlc_create_account(const uint8_t *db_data,
                                             uint32_t network_id,
                                             const char *account_name,
                                             const char *key_source);
-
-/**
- * Frees a FfiUuid value
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FfiUuid`].
- */
-void zcashlc_free_ffi_uuid(struct FfiUuid *ptr);
 
 /**
  * Adds a new account to the wallet by importing the UFVK that will be used to detect incoming
@@ -766,16 +728,6 @@ int8_t zcashlc_is_seed_relevant_to_any_derived_account(const uint8_t *db_data,
                                                        const uint8_t *seed,
                                                        uintptr_t seed_len,
                                                        uint32_t network_id);
-
-/**
- * Frees an array of `FFIEncodedKeys` values as allocated by `zcashlc_list_transparent_receivers`.
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FFIEncodedKeys`].
- *   See the safety documentation of [`FFIEncodedKeys`].
- */
-void zcashlc_free_keys(struct FFIEncodedKeys *ptr);
 
 /**
  * Returns the most-recently-generated unified payment address for the specified account.
@@ -1133,26 +1085,6 @@ struct FfiWalletSummary *zcashlc_get_wallet_summary(const uint8_t *db_data,
                                                     uint32_t min_confirmations);
 
 /**
- * Frees an [`FfiWalletSummary`] value.
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FfiWalletSummary`].
- *   See the safety documentation of [`FfiWalletSummary`].
- */
-void zcashlc_free_wallet_summary(struct FfiWalletSummary *ptr);
-
-/**
- * Frees an array of `FfiScanRanges` values as allocated by `zcashlc_suggest_scan_ranges`.
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FfiScanRanges`].
- *   See the safety documentation of [`FfiScanRanges`].
- */
-void zcashlc_free_scan_ranges(struct FfiScanRanges *ptr);
-
-/**
  * Returns a list of suggested scan ranges based upon the current wallet state.
  *
  * This method should only be used in cases where the `CompactBlock` data that will be
@@ -1218,15 +1150,6 @@ struct FfiScanSummary *zcashlc_scan_blocks(const uint8_t *fs_block_cache_root,
                                            uintptr_t from_state_len,
                                            uint32_t scan_limit,
                                            uint32_t network_id);
-
-/**
- * Frees an [`FfiScanSummary`] value.
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FfiScanSummary`].
- */
-void zcashlc_free_scan_summary(struct FfiScanSummary *ptr);
 
 /**
  * Inserts a UTXO into the wallet database.
@@ -1367,16 +1290,6 @@ int32_t zcashlc_decrypt_and_store_transaction(const uint8_t *db_data,
                                               uint32_t network_id);
 
 /**
- * Frees an [`FfiBoxedSlice`].
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of
- *   [`FfiBoxedSlice`]. See the safety documentation of [`FfiBoxedSlice`].
- */
-void zcashlc_free_boxed_slice(struct FfiBoxedSlice *ptr);
-
-/**
  * Select transaction inputs, compute fees, and construct a proposal for a transaction
  * that can then be authorized and made ready for submission to the network with
  * `zcashlc_create_proposed_transaction`.
@@ -1479,16 +1392,6 @@ struct FfiBoxedSlice *zcashlc_propose_shielding(const uint8_t *db_data,
                                                 const char *transparent_receiver,
                                                 uint32_t network_id,
                                                 uint32_t min_confirmations);
-
-/**
- * Frees an array of FfiTxIds values as allocated by `zcashlc_create_proposed_transactions`.
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FfiTxIds`].
- *   See the safety documentation of [`FfiTxIds`].
- */
-void zcashlc_free_txids(struct FfiTxIds *ptr);
 
 /**
  * Creates a transaction from the given proposal.
@@ -1739,16 +1642,6 @@ void zcashlc_set_transaction_status(const uint8_t *db_data,
                                     const uint8_t *txid_bytes,
                                     uintptr_t txid_bytes_len,
                                     struct FfiTransactionStatus status);
-
-/**
- * Frees an array of FfiTransactionDataRequest values as allocated by `zcashlc_transaction_data_requests`.
- *
- * # Safety
- *
- * - `ptr` if `ptr` is non-null it must point to a struct having the layout of [`FfiTransactionDataRequests`].
- *   See the safety documentation of [`FfiTransactionDataRequests`].
- */
-void zcashlc_free_transaction_data_requests(struct FfiTransactionDataRequests *ptr);
 
 /**
  * Returns a list of transaction data requests that the network client should satisfy.
@@ -2058,3 +1951,110 @@ struct FfiBoxedSlice *zcashlc_derive_arbitrary_account_key(const uint8_t *contex
                                                            uintptr_t seed_len,
                                                            int32_t account,
                                                            uint32_t network_id);
+
+/**
+ * Frees an [`Account`] value
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`Account`].
+ */
+void zcashlc_free_account(struct FfiAccount *ptr);
+
+/**
+ * Frees a [`Uuid`] value
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`Uuid`].
+ */
+void zcashlc_free_ffi_uuid(struct FfiUuid *ptr);
+
+/**
+ * Frees an array of [`Uuid`] values as allocated by `zcashlc_list_accounts`.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`Accounts`].
+ *   See the safety documentation of [`Accounts`].
+ */
+void zcashlc_free_accounts(struct FfiAccounts *ptr);
+
+/**
+ * Frees a [`BinaryKey`] value
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`BinaryKey`].
+ *   See the safety documentation of [`BinaryKey`].
+ */
+void zcashlc_free_binary_key(struct FFIBinaryKey *ptr);
+
+/**
+ * Frees an array of [`EncodedKey`] values as allocated by `zcashlc_list_transparent_receivers`.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`EncodedKeys`].
+ *   See the safety documentation of [`EncodedKeys`].
+ */
+void zcashlc_free_keys(struct FFIEncodedKeys *ptr);
+
+/**
+ * Frees an [`WalletSummary`] value.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`WalletSummary`].
+ *   See the safety documentation of [`WalletSummary`].
+ */
+void zcashlc_free_wallet_summary(struct FfiWalletSummary *ptr);
+
+/**
+ * Frees an array of [`ScanRange`] values as allocated by `zcashlc_suggest_scan_ranges`.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`ScanRanges`].
+ *   See the safety documentation of [`ScanRanges`].
+ */
+void zcashlc_free_scan_ranges(struct FfiScanRanges *ptr);
+
+/**
+ * Frees a [`ScanSummary`] value.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`ScanSummary`].
+ */
+void zcashlc_free_scan_summary(struct FfiScanSummary *ptr);
+
+/**
+ * Frees a [`BoxedSlice`].
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of
+ *   [`BoxedSlice`]. See the safety documentation of [`BoxedSlice`].
+ */
+void zcashlc_free_boxed_slice(struct FfiBoxedSlice *ptr);
+
+/**
+ * Frees an array of `[u8; 32]` values as allocated by `zcashlc_create_proposed_transactions`.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`TxIds`].
+ *   See the safety documentation of [`TxIds`].
+ */
+void zcashlc_free_txids(struct FfiTxIds *ptr);
+
+/**
+ * Frees an array of [`TransactionDataRequest`] values as allocated by `zcashlc_transaction_data_requests`.
+ *
+ * # Safety
+ *
+ * - `ptr` if `ptr` is non-null it must point to a struct having the layout of [`TransactionDataRequests`].
+ *   See the safety documentation of [`TransactionDataRequests`].
+ */
+void zcashlc_free_transaction_data_requests(struct FfiTransactionDataRequests *ptr);

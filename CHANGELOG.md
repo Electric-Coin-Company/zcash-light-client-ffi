@@ -7,6 +7,10 @@ and this library adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `zcashlc_account_metadata_key_from_parts`
+- `zcashlc_derive_account_metadata_key`
+- `zcashlc_derive_private_use_metadata_key`
+- `zcashlc_free_account_metadata_key`
 - `zcashlc_pczt_requires_sapling_proofs`
 - `zcashlc_redact_pczt_for_signer`
 

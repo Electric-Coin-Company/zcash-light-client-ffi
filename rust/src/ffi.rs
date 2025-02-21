@@ -832,3 +832,28 @@ pub unsafe extern "C" fn zcashlc_free_ffi_address(ptr: *mut Address) {
         drop(ffi_address);
     }
 }
+
+/// A struct that contains a ZIP 325 Account Metadata Key.
+#[repr(C)]
+pub struct AccountMetadataKey {
+    pub(crate) inner: zip32::registered::SecretKey,
+}
+
+impl AccountMetadataKey {
+    pub(crate) fn new(inner: zip32::registered::SecretKey) -> *mut Self {
+        Box::into_raw(Box::new(AccountMetadataKey { inner }))
+    }
+}
+
+/// Frees an AccountMetadataKey value
+///
+/// # Safety
+///
+/// - `ptr` must either be null or point to a struct having the layout of [`AccountMetadataKey`].
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_free_account_metadata_key(ptr: *mut AccountMetadataKey) {
+    if !ptr.is_null() {
+        let key: Box<AccountMetadataKey> = unsafe { Box::from_raw(ptr) };
+        drop(key);
+    }
+}

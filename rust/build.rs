@@ -51,6 +51,7 @@ fn main() {
         .rename_item("TransactionDataRequest", "FfiTransactionDataRequest")
         .rename_item("TransactionDataRequests", "FfiTransactionDataRequests")
         .rename_item("Address", "FfiAddress")
+        .rename_item("AccountMetadataKey", "FfiAccountMetadataKey")
         .generate()
     {
         b.write_to_file("target/Headers/zcashlc.h");

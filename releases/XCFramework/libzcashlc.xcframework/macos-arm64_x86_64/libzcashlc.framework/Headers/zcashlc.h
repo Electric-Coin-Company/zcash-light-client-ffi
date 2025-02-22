@@ -482,6 +482,13 @@ typedef struct FfiAddress {
 } FfiAddress;
 
 /**
+ * A struct that contains a ZIP 325 Account Metadata Key.
+ */
+typedef struct FfiAccountMetadataKey {
+  SecretKey inner;
+} FfiAccountMetadataKey;
+
+/**
  * Initializes global Rust state, such as the logging infrastructure and threadpools.
  *
  * `log_level` defines how the Rust layer logs its events. These values are supported,
@@ -1503,6 +1510,49 @@ struct FfiBoxedSlice *zcashlc_create_pczt_from_proposal(const uint8_t *db_data,
                                                         const uint8_t *account_uuid_bytes);
 
 /**
+ * Redacts information from the given PCZT that is unnecessary for the Signer role.
+ *
+ * Returns the updated PCZT in its serialized format.
+ *
+ * # Parameters
+ * - `pczt_ptr`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction to be redacted.
+ * - `pczt_len`: The length of the `pczt_ptr` buffer.
+ *
+ * # Safety
+ *
+ * - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `pczt_ptr` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_redact_pczt_for_signer(const uint8_t *pczt_ptr, uintptr_t pczt_len);
+
+/**
+ * Returns `true` if this PCZT requires Sapling proofs (and thus the caller needs to have
+ * downloaded them).
+ *
+ * # Parameters
+ * - `pczt_ptr`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction to be redacted.
+ * - `pczt_len`: The length of the `pczt_ptr` buffer.
+ *
+ * # Safety
+ *
+ * - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `pczt_ptr` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ */
+bool zcashlc_pczt_requires_sapling_proofs(const uint8_t *pczt_ptr, uintptr_t pczt_len);
+
+/**
  * Adds proofs to the given PCZT.
  *
  * Returns the updated PCZT in its serialized format.
@@ -1827,15 +1877,6 @@ char *zcashlc_spending_key_to_full_viewing_key(const uint8_t *usk_ptr,
                                                uint32_t network_id);
 
 /**
- * Frees a FfiAddress value
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FfiAddress`].
- */
-void zcashlc_free_ffi_address(struct FfiAddress *ptr);
-
-/**
  * Derives a unified address address for the provided UFVK, along with the diversifier at which it
  * was derived; this may not be equal to the provided diversifier index if no valid Sapling
  * address could be derived at that index. If the `diversifier_index_bytes` parameter is null, the
@@ -1894,6 +1935,78 @@ char *zcashlc_get_transparent_receiver_for_unified_address(const char *ua);
  *   when done using it.
  */
 char *zcashlc_get_sapling_receiver_for_unified_address(const char *ua);
+
+/**
+ * Constructs an ffi::AccountMetadataKey from its parts.
+ *
+ * # Safety
+ *
+ * - `sk` must be non-null and valid for reads for 32 bytes, and it must have an alignment of `1`.
+ * - `chain_code` must be non-null and valid for reads for 32 bytes, and it must have an alignment
+ *   of `1`.
+ * - Call [`zcashlc_free_account_metadata_key`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiAccountMetadataKey *zcashlc_account_metadata_key_from_parts(const uint8_t *sk,
+                                                                      const uint8_t *chain_code);
+
+/**
+ * Derives a ZIP 325 Account Metadata Key from the given seed.
+ *
+ * # Safety
+ *
+ * - `seed` must be non-null and valid for reads for `seed_len` bytes.
+ * - The memory referenced by `seed` must not be mutated for the duration of the function call.
+ * - The total size `seed_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - Call [`zcashlc_free_account_metadata_key`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiAccountMetadataKey *zcashlc_derive_account_metadata_key(const uint8_t *seed,
+                                                                  uintptr_t seed_len,
+                                                                  int32_t account,
+                                                                  uint32_t network_id);
+
+/**
+ * Derives a metadata key for private use from a ZIP 325 Account Metadata Key.
+ *
+ * - `ufvk` is the external UFVK for which a metadata key is required, or `null` if the
+ *   metadata key is "inherent" (for the same account as the Account Metadata Key).
+ * - `private_use_subject` is a globally unique non-empty sequence of at most 252 bytes
+ *   that identifies the desired private-use context.
+ *
+ * If `ufvk` is null, this function will return a single 32-byte metadata key.
+ *
+ * If `ufvk` is non-null, this function will return one metadata key for every FVK item
+ * contained within the UFVK, in preference order. As UFVKs may in general change over
+ * time (due to the inclusion of new higher-preference FVK items, or removal of older
+ * deprecated FVK items), private usage of these keys should always follow preference
+ * order:
+ * - For encryption-like private usage, the first key in the array should always be
+ *   used, and all other keys ignored.
+ * - For decryption-like private usage, each key in the array should be tried in turn
+ *   until metadata can be recovered, and then the metadata should be re-encrypted
+ *   under the first key.
+ *
+ * # Safety
+ *
+ * - `account_metadata_key` must be non-null and must point to a struct having the layout of
+ *   [`ffi::AccountMetadataKey`].
+ * - If `ufvk` is non-null, it must point to a null-terminated UTF-8 string.
+ * - `private_use_subject` must be non-null and valid for reads for `private_use_subject_len`
+ *   bytes.
+ * - The memory referenced by `private_use_subject` must not be mutated for the duration
+ *   of the function call.
+ * - The total size `private_use_subject_len` must be no larger than `isize::MAX`. See
+ *   the safety documentation of `pointer::offset`.
+ * - Call `zcashlc_free_boxed_slice` to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiTxIds *zcashlc_derive_private_use_metadata_key(const struct FfiAccountMetadataKey *account_metadata_key,
+                                                         const char *ufvk,
+                                                         const uint8_t *private_use_subject,
+                                                         uintptr_t private_use_subject_len,
+                                                         uint32_t network_id);
 
 /**
  * Derives and returns a ZIP 32 Arbitrary Key from the given seed at the "wallet level", i.e.
@@ -2058,3 +2171,21 @@ void zcashlc_free_txids(struct FfiTxIds *ptr);
  *   See the safety documentation of [`TransactionDataRequests`].
  */
 void zcashlc_free_transaction_data_requests(struct FfiTransactionDataRequests *ptr);
+
+/**
+ * Frees an [`Address`] value
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`Address`].
+ */
+void zcashlc_free_ffi_address(struct FfiAddress *ptr);
+
+/**
+ * Frees an AccountMetadataKey value
+ *
+ * # Safety
+ *
+ * - `ptr` must either be null or point to a struct having the layout of [`AccountMetadataKey`].
+ */
+void zcashlc_free_account_metadata_key(struct FfiAccountMetadataKey *ptr);

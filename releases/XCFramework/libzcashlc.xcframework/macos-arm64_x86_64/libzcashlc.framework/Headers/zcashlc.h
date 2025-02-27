@@ -8,6 +8,8 @@
  */
 typedef struct FfiAccountMetadataKey FfiAccountMetadataKey;
 
+typedef struct LwdConn LwdConn;
+
 typedef struct TorRuntime TorRuntime;
 
 /**
@@ -1733,9 +1735,33 @@ struct TorRuntime *zcashlc_create_tor_runtime(const uint8_t *tor_dir, uintptr_t 
  *
  * # Safety
  *
- * - If `ptr` is non-null, it must point to a struct having the layout of [`TorRuntime`].
+ * - If `ptr` is non-null, it must be a pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
  */
 void zcashlc_free_tor_runtime(struct TorRuntime *ptr);
+
+/**
+ * Returns a new isolated `TorRuntime` handle.
+ *
+ * The two `TorRuntime`s will share internal state and configuration, but their streams
+ * will never share circuits with one another.
+ *
+ * Use this method when you want separate parts of your program to each have a
+ * `TorRuntime` handle, but where you don't want their activities to be linkable to one
+ * another over the Tor network.
+ *
+ * Calling this method is usually preferable to creating a completely separate
+ * `TorRuntime` instance, since it can share its internals with the existing `TorRuntime`.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ * - Call [`zcashlc_free_tor_runtime`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct TorRuntime *zcashlc_tor_isolated_client(struct TorRuntime *tor_runtime);
 
 /**
  * Fetches the current ZEC-USD exchange rate over Tor.
@@ -1747,11 +1773,72 @@ void zcashlc_free_tor_runtime(struct TorRuntime *ptr);
  *
  * # Safety
  *
- * - `tor_runtime` must be non-null and point to a struct having the layout of
- *   [`TorRuntime`].
+ * - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
  * - `tor_runtime` must not be passed to two FFI calls at the same time.
  */
 struct Decimal zcashlc_get_exchange_rate_usd(struct TorRuntime *tor_runtime);
+
+/**
+ * Connects to the lightwalletd server at the given endpoint.
+ *
+ * Each connection returned by this method is isolated from any other Tor usage.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ * - `endpoint` must be non-null and must point to a null-terminated UTF-8 string.
+ * - Call [`zcashlc_free_tor_lwd_conn`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct LwdConn *zcashlc_tor_connect_to_lightwalletd(struct TorRuntime *tor_runtime,
+                                                    const char *endpoint);
+
+/**
+ * Frees a Tor lightwalletd connection.
+ *
+ * # Safety
+ *
+ * - If `ptr` is non-null, it must be a pointer returned by a `zcashlc_*` method with
+ *   return type `*mut tor::LwdConn` that has not previously been freed.
+ */
+void zcashlc_free_tor_lwd_conn(struct LwdConn *ptr);
+
+/**
+ * Fetches the transaction with the given ID.
+ *
+ * # Safety
+ *
+ * - `lwd_conn` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut tor::LwdConn` that has not previously been freed.
+ * - `lwd_conn` must not be passed to two FFI calls at the same time.
+ * - `txid_bytes` must be non-null and valid for reads for 32 bytes, and it must have an alignment
+ *   of `1`.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_tor_lwd_conn_fetch_transaction(struct LwdConn *lwd_conn,
+                                                             const uint8_t *txid_bytes);
+
+/**
+ * Submits a transaction to the Zcash network via the given lightwalletd connection.
+ *
+ * # Safety
+ *
+ * - `lwd_conn` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut tor::LwdConn` that has not previously been freed.
+ * - `lwd_conn` must not be passed to two FFI calls at the same time.
+ * - `tx` must be non-null and valid for reads for `tx_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `tx` must not be mutated for the duration of the function call.
+ * - The total size `tx_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ */
+bool zcashlc_tor_lwd_conn_submit_transaction(struct LwdConn *lwd_conn,
+                                             const uint8_t *tx,
+                                             uintptr_t tx_len);
 
 /**
  * Returns the network type and address kind for the given address string,

@@ -12,7 +12,7 @@ Currently implemented is building for apple platforms as an `xcframework` and fo
 Add the package as a dependency
 ````Swift
 dependencies: [
-  .package(url: "https://github.com/Electric-Coin-Company/zcash-light-client-ffi", from: "0.1.2")
+  .package(url: "https://github.com/Electric-Coin-Company/zcash-light-client-ffi", exact: "0.12.0")
   // other dependencies
 ]
 ````

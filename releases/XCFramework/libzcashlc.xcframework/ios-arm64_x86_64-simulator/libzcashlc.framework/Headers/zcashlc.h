@@ -53,6 +53,7 @@ typedef struct FfiAccount {
   char *key_source;
   uint8_t seed_fingerprint[32];
   uint32_t hd_account_index;
+  char *ufvk;
 } FfiAccount;
 
 /**

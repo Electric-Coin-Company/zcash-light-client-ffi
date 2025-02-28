@@ -29,6 +29,16 @@ jobs:
       - name: Select the required Xcode version
         run: sudo xcode-select -s '/Applications/Xcode_14.3.1.app/Contents/Developer'
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
       - name: Install the required Rust targets
         run: make install
 

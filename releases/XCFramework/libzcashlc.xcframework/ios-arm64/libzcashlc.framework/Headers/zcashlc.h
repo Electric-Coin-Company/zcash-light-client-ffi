@@ -1814,13 +1814,16 @@ void zcashlc_free_tor_lwd_conn(struct LwdConn *ptr);
  * - `lwd_conn` must be a non-null pointer returned by a `zcashlc_*` method with
  *   return type `*mut tor::LwdConn` that has not previously been freed.
  * - `lwd_conn` must not be passed to two FFI calls at the same time.
- * - `txid_bytes` must be non-null and valid for reads for 32 bytes, and it must have an alignment
- *   of `1`.
+ * - `txid_bytes` must be non-null and valid for reads for 32 bytes, and it must have an
+ *   alignment of `1`.
+ * - `height_ret` must be non-null and valid for writes for 8 bytes, and it must have an
+ *   alignment of `1`.
  * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
  *   pointer when done using it.
  */
 struct FfiBoxedSlice *zcashlc_tor_lwd_conn_fetch_transaction(struct LwdConn *lwd_conn,
-                                                             const uint8_t *txid_bytes);
+                                                             const uint8_t *txid_bytes,
+                                                             uint64_t *height_ret);
 
 /**
  * Submits a transaction to the Zcash network via the given lightwalletd connection.

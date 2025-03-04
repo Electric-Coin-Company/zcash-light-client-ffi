@@ -1537,7 +1537,7 @@ struct FfiBoxedSlice *zcashlc_redact_pczt_for_signer(const uint8_t *pczt_ptr, ui
 
 /**
  * Returns `true` if this PCZT requires Sapling proofs (and thus the caller needs to have
- * downloaded them).
+ * downloaded them). If the PCZT is invalid, `false` will be returned.
  *
  * # Parameters
  * - `pczt_ptr`: A pointer to a byte array containing the encoded partially-constructed

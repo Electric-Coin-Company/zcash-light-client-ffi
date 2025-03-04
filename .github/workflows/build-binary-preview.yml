@@ -16,13 +16,28 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Create, or merge into, the corresponding preview branch
-        run: git switch -c "preview/${GITHUB_REF_NAME}" || git switch -m "preview/${GITHUB_REF_NAME}"
+      - name: Switch to the corresponding preview branch, or create it if needed
+        run: git switch "preview/${GITHUB_REF_NAME}" || git switch -c "preview/${GITHUB_REF_NAME}"
+
+      - name: Merge the ref into the preview branch (no-op if created new)
+        run: git merge "${GITHUB_REF_NAME}"
 
       # https://github.com/actions/runner-images/blob/main/images/macos/macos-13-Readme.md#xcode
       - name: Select the required Xcode version
         run: sudo xcode-select -s '/Applications/Xcode_14.3.1.app/Contents/Developer'
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install the required Rust targets
         run: make install

@@ -3,6 +3,13 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+/**
+ * A struct that contains a ZIP 325 Account Metadata Key.
+ */
+typedef struct FfiAccountMetadataKey FfiAccountMetadataKey;
+
+typedef struct LwdConn LwdConn;
+
 typedef struct TorRuntime TorRuntime;
 
 /**
@@ -46,6 +53,7 @@ typedef struct FfiAccount {
   char *key_source;
   uint8_t seed_fingerprint[32];
   uint32_t hd_account_index;
+  char *ufvk;
 } FfiAccount;
 
 /**
@@ -329,10 +337,12 @@ typedef struct FfiBoxedSlice {
  *   by `ptr` must be no larger than isize::MAX. See the safety documentation of
  *   `pointer::offset`.
  */
-typedef struct FfiTxIds {
+typedef struct FfiSymmetricKeys {
   uint8_t (*ptr)[32];
   uintptr_t len;
-} FfiTxIds;
+} FfiSymmetricKeys;
+
+typedef struct FfiSymmetricKeys FfiTxIds;
 
 /**
  * Metadata about the status of a transaction obtained by inspecting the chain state.
@@ -1446,17 +1456,17 @@ struct FfiBoxedSlice *zcashlc_propose_shielding(const uint8_t *db_data,
  * - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  */
-struct FfiTxIds *zcashlc_create_proposed_transactions(const uint8_t *db_data,
-                                                      uintptr_t db_data_len,
-                                                      const uint8_t *proposal_ptr,
-                                                      uintptr_t proposal_len,
-                                                      const uint8_t *usk_ptr,
-                                                      uintptr_t usk_len,
-                                                      const uint8_t *spend_params,
-                                                      uintptr_t spend_params_len,
-                                                      const uint8_t *output_params,
-                                                      uintptr_t output_params_len,
-                                                      uint32_t network_id);
+FfiTxIds *zcashlc_create_proposed_transactions(const uint8_t *db_data,
+                                               uintptr_t db_data_len,
+                                               const uint8_t *proposal_ptr,
+                                               uintptr_t proposal_len,
+                                               const uint8_t *usk_ptr,
+                                               uintptr_t usk_len,
+                                               const uint8_t *spend_params,
+                                               uintptr_t spend_params_len,
+                                               const uint8_t *output_params,
+                                               uintptr_t output_params_len,
+                                               uint32_t network_id);
 
 /**
  * Creates a partially-constructed (unsigned without proofs) transaction from the given proposal.
@@ -1501,6 +1511,49 @@ struct FfiBoxedSlice *zcashlc_create_pczt_from_proposal(const uint8_t *db_data,
                                                         const uint8_t *proposal_ptr,
                                                         uintptr_t proposal_len,
                                                         const uint8_t *account_uuid_bytes);
+
+/**
+ * Redacts information from the given PCZT that is unnecessary for the Signer role.
+ *
+ * Returns the updated PCZT in its serialized format.
+ *
+ * # Parameters
+ * - `pczt_ptr`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction to be redacted.
+ * - `pczt_len`: The length of the `pczt_ptr` buffer.
+ *
+ * # Safety
+ *
+ * - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `pczt_ptr` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_redact_pczt_for_signer(const uint8_t *pczt_ptr, uintptr_t pczt_len);
+
+/**
+ * Returns `true` if this PCZT requires Sapling proofs (and thus the caller needs to have
+ * downloaded them). If the PCZT is invalid, `false` will be returned.
+ *
+ * # Parameters
+ * - `pczt_ptr`: A pointer to a byte array containing the encoded partially-constructed
+ *   transaction to be redacted.
+ * - `pczt_len`: The length of the `pczt_ptr` buffer.
+ *
+ * # Safety
+ *
+ * - `pczt_ptr` must be non-null and valid for reads for `pczt_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `pczt_ptr` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `pczt_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ */
+bool zcashlc_pczt_requires_sapling_proofs(const uint8_t *pczt_ptr, uintptr_t pczt_len);
 
 /**
  * Adds proofs to the given PCZT.
@@ -1683,9 +1736,33 @@ struct TorRuntime *zcashlc_create_tor_runtime(const uint8_t *tor_dir, uintptr_t 
  *
  * # Safety
  *
- * - If `ptr` is non-null, it must point to a struct having the layout of [`TorRuntime`].
+ * - If `ptr` is non-null, it must be a pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
  */
 void zcashlc_free_tor_runtime(struct TorRuntime *ptr);
+
+/**
+ * Returns a new isolated `TorRuntime` handle.
+ *
+ * The two `TorRuntime`s will share internal state and configuration, but their streams
+ * will never share circuits with one another.
+ *
+ * Use this method when you want separate parts of your program to each have a
+ * `TorRuntime` handle, but where you don't want their activities to be linkable to one
+ * another over the Tor network.
+ *
+ * Calling this method is usually preferable to creating a completely separate
+ * `TorRuntime` instance, since it can share its internals with the existing `TorRuntime`.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ * - Call [`zcashlc_free_tor_runtime`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct TorRuntime *zcashlc_tor_isolated_client(struct TorRuntime *tor_runtime);
 
 /**
  * Fetches the current ZEC-USD exchange rate over Tor.
@@ -1697,11 +1774,75 @@ void zcashlc_free_tor_runtime(struct TorRuntime *ptr);
  *
  * # Safety
  *
- * - `tor_runtime` must be non-null and point to a struct having the layout of
- *   [`TorRuntime`].
+ * - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
  * - `tor_runtime` must not be passed to two FFI calls at the same time.
  */
 struct Decimal zcashlc_get_exchange_rate_usd(struct TorRuntime *tor_runtime);
+
+/**
+ * Connects to the lightwalletd server at the given endpoint.
+ *
+ * Each connection returned by this method is isolated from any other Tor usage.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ * - `endpoint` must be non-null and must point to a null-terminated UTF-8 string.
+ * - Call [`zcashlc_free_tor_lwd_conn`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct LwdConn *zcashlc_tor_connect_to_lightwalletd(struct TorRuntime *tor_runtime,
+                                                    const char *endpoint);
+
+/**
+ * Frees a Tor lightwalletd connection.
+ *
+ * # Safety
+ *
+ * - If `ptr` is non-null, it must be a pointer returned by a `zcashlc_*` method with
+ *   return type `*mut tor::LwdConn` that has not previously been freed.
+ */
+void zcashlc_free_tor_lwd_conn(struct LwdConn *ptr);
+
+/**
+ * Fetches the transaction with the given ID.
+ *
+ * # Safety
+ *
+ * - `lwd_conn` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut tor::LwdConn` that has not previously been freed.
+ * - `lwd_conn` must not be passed to two FFI calls at the same time.
+ * - `txid_bytes` must be non-null and valid for reads for 32 bytes, and it must have an
+ *   alignment of `1`.
+ * - `height_ret` must be non-null and valid for writes for 8 bytes, and it must have an
+ *   alignment of `1`.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_tor_lwd_conn_fetch_transaction(struct LwdConn *lwd_conn,
+                                                             const uint8_t *txid_bytes,
+                                                             uint64_t *height_ret);
+
+/**
+ * Submits a transaction to the Zcash network via the given lightwalletd connection.
+ *
+ * # Safety
+ *
+ * - `lwd_conn` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut tor::LwdConn` that has not previously been freed.
+ * - `lwd_conn` must not be passed to two FFI calls at the same time.
+ * - `tx` must be non-null and valid for reads for `tx_len` bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `tx` must not be mutated for the duration of the function call.
+ * - The total size `tx_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ */
+bool zcashlc_tor_lwd_conn_submit_transaction(struct LwdConn *lwd_conn,
+                                             const uint8_t *tx,
+                                             uintptr_t tx_len);
 
 /**
  * Returns the network type and address kind for the given address string,
@@ -1827,15 +1968,6 @@ char *zcashlc_spending_key_to_full_viewing_key(const uint8_t *usk_ptr,
                                                uint32_t network_id);
 
 /**
- * Frees a FfiAddress value
- *
- * # Safety
- *
- * - `ptr` must be non-null and must point to a struct having the layout of [`FfiAddress`].
- */
-void zcashlc_free_ffi_address(struct FfiAddress *ptr);
-
-/**
  * Derives a unified address address for the provided UFVK, along with the diversifier at which it
  * was derived; this may not be equal to the provided diversifier index if no valid Sapling
  * address could be derived at that index. If the `diversifier_index_bytes` parameter is null, the
@@ -1894,6 +2026,83 @@ char *zcashlc_get_transparent_receiver_for_unified_address(const char *ua);
  *   when done using it.
  */
 char *zcashlc_get_sapling_receiver_for_unified_address(const char *ua);
+
+/**
+ * Constructs an ffi::AccountMetadataKey from its parts.
+ *
+ * # Safety
+ *
+ * - `sk` must be non-null and valid for reads for 32 bytes, and it must have an alignment of `1`.
+ * - The memory referenced by `sk` must not be mutated for the duration of the function call.
+ * - `chain_code` must be non-null and valid for reads for 32 bytes, and it must have an alignment
+ *   of `1`.
+ * - The memory referenced by `chain_code` must not be mutated for the duration of the function
+ *   call.
+ * - Call [`zcashlc_free_account_metadata_key`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiAccountMetadataKey *zcashlc_account_metadata_key_from_parts(const uint8_t *sk,
+                                                                      const uint8_t *chain_code);
+
+/**
+ * Derives a ZIP 325 Account Metadata Key from the given seed.
+ *
+ * # Safety
+ *
+ * - `seed` must be non-null and valid for reads for `seed_len` bytes.
+ * - The memory referenced by `seed` must not be mutated for the duration of the function call.
+ * - The total size `seed_len` must be no larger than `isize::MAX`. See the safety documentation
+ *   of `pointer::offset`.
+ * - Call [`zcashlc_free_account_metadata_key`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiAccountMetadataKey *zcashlc_derive_account_metadata_key(const uint8_t *seed,
+                                                                  uintptr_t seed_len,
+                                                                  int32_t account,
+                                                                  uint32_t network_id);
+
+/**
+ * Derives a metadata key for private use from a ZIP 325 Account Metadata Key.
+ *
+ * - `ufvk` is the external UFVK for which a metadata key is required, or `null` if the
+ *   metadata key is "inherent" (for the same account as the Account Metadata Key).
+ * - `private_use_subject` is a globally unique non-empty sequence of at most 252 bytes
+ *   that identifies the desired private-use context.
+ *
+ * If `ufvk` is null, this function will return a single 32-byte metadata key.
+ *
+ * If `ufvk` is non-null, this function will return one metadata key for every FVK item
+ * contained within the UFVK, in preference order. As UFVKs may in general change over
+ * time (due to the inclusion of new higher-preference FVK items, or removal of older
+ * deprecated FVK items), private usage of these keys should always follow preference
+ * order:
+ * - For encryption-like private usage, the first key in the array should always be
+ *   used, and all other keys ignored.
+ * - For decryption-like private usage, each key in the array should be tried in turn
+ *   until metadata can be recovered, and then the metadata should be re-encrypted
+ *   under the first key.
+ *
+ * # Safety
+ *
+ * - `account_metadata_key` must be non-null and must point to a struct having the layout
+ *   of [`ffi::AccountMetadataKey`].
+ * - The memory referenced by `account_metadata_key` must not be mutated for the duration
+ *   of the function call.
+ * - If `ufvk` is non-null, it must point to a null-terminated UTF-8 string.
+ * - `private_use_subject` must be non-null and valid for reads for `private_use_subject_len`
+ *   bytes.
+ * - The memory referenced by `private_use_subject` must not be mutated for the duration
+ *   of the function call.
+ * - The total size `private_use_subject_len` must be no larger than `isize::MAX`. See
+ *   the safety documentation of `pointer::offset`.
+ * - Call `zcashlc_free_symmetric_keys` to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiSymmetricKeys *zcashlc_derive_private_use_metadata_key(const struct FfiAccountMetadataKey *account_metadata_key,
+                                                                 const char *ufvk,
+                                                                 const uint8_t *private_use_subject,
+                                                                 uintptr_t private_use_subject_len,
+                                                                 uint32_t network_id);
 
 /**
  * Derives and returns a ZIP 32 Arbitrary Key from the given seed at the "wallet level", i.e.
@@ -2040,6 +2249,16 @@ void zcashlc_free_scan_summary(struct FfiScanSummary *ptr);
 void zcashlc_free_boxed_slice(struct FfiBoxedSlice *ptr);
 
 /**
+ * Frees an array of `[u8; 32]` values.
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of
+ *   [`SymmetricKeys`]. See the safety documentation of [`SymmetricKeys`].
+ */
+void zcashlc_free_symmetric_keys(struct FfiSymmetricKeys *ptr);
+
+/**
  * Frees an array of `[u8; 32]` values as allocated by `zcashlc_create_proposed_transactions`.
  *
  * # Safety
@@ -2047,7 +2266,7 @@ void zcashlc_free_boxed_slice(struct FfiBoxedSlice *ptr);
  * - `ptr` must be non-null and must point to a struct having the layout of [`TxIds`].
  *   See the safety documentation of [`TxIds`].
  */
-void zcashlc_free_txids(struct FfiTxIds *ptr);
+void zcashlc_free_txids(FfiTxIds *ptr);
 
 /**
  * Frees an array of [`TransactionDataRequest`] values as allocated by `zcashlc_transaction_data_requests`.
@@ -2058,3 +2277,21 @@ void zcashlc_free_txids(struct FfiTxIds *ptr);
  *   See the safety documentation of [`TransactionDataRequests`].
  */
 void zcashlc_free_transaction_data_requests(struct FfiTransactionDataRequests *ptr);
+
+/**
+ * Frees an [`Address`] value
+ *
+ * # Safety
+ *
+ * - `ptr` must be non-null and must point to a struct having the layout of [`Address`].
+ */
+void zcashlc_free_ffi_address(struct FfiAddress *ptr);
+
+/**
+ * Frees an AccountMetadataKey value
+ *
+ * # Safety
+ *
+ * - `ptr` must either be null or point to a struct having the layout of [`AccountMetadataKey`].
+ */
+void zcashlc_free_account_metadata_key(struct FfiAccountMetadataKey *ptr);

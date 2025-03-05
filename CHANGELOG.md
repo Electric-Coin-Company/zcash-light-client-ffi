@@ -10,18 +10,23 @@ and this library adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `FfiAccountMetadataKey`
+- `FfiLightdInfo`
 - `FfiSymmetricKeys`
 - `zcashlc_account_metadata_key_from_parts`
 - `zcashlc_derive_account_metadata_key`
 - `zcashlc_derive_private_use_metadata_key`
 - `zcashlc_free_account_metadata_key`
+- `zcashlc_free_lightd_info`
 - `zcashlc_free_symmetric_keys`
 - `zcashlc_free_tor_lwd_conn`
 - `zcashlc_pczt_requires_sapling_proofs`
 - `zcashlc_redact_pczt_for_signer`
 - `zcashlc_tor_connect_to_lightwalletd`
 - `zcashlc_tor_isolated_client`
+- `zcashlc_tor_lwd_conn_get_info`
+- `zcashlc_tor_lwd_conn_get_tree_state`
 - `zcashlc_tor_lwd_conn_fetch_transaction`
+- `zcashlc_tor_lwd_conn_latest_block`
 - `zcashlc_tor_lwd_conn_submit_transaction`
 
 ### Changed

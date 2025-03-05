@@ -3,7 +3,7 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::ptr;
 
-use zcash_client_backend::{address::UnifiedAddress, data_api};
+use zcash_client_backend::{address::UnifiedAddress, data_api, proto::service};
 use zcash_client_sqlite::AccountUuid;
 use zcash_protocol::{consensus::Network, value::ZatBalance};
 use zip32::DiversifierIndex;
@@ -876,5 +876,99 @@ pub unsafe extern "C" fn zcashlc_free_account_metadata_key(ptr: *mut AccountMeta
     if !ptr.is_null() {
         let key: Box<AccountMetadataKey> = unsafe { Box::from_raw(ptr) };
         drop(key);
+    }
+}
+
+/// Information about a lightwalletd instance and the state of the blockchain.
+#[repr(C)]
+pub struct LightdInfo {
+    version: *mut c_char,
+    vendor: *mut c_char,
+    taddr_support: bool,
+    chain_name: *mut c_char,
+    sapling_activation_height: u32,
+    consensus_branch_id: u32,
+    block_height: u32,
+    git_commit: *mut c_char,
+    branch: *mut c_char,
+    build_date: *mut c_char,
+    build_user: *mut c_char,
+    estimated_height: u32,
+    zcashd_build: *mut c_char,
+    zcashd_subversion: *mut c_char,
+}
+
+impl LightdInfo {
+    pub(crate) fn new(info: service::LightdInfo) -> anyhow::Result<*mut Self> {
+        let version = CString::new(info.version)?;
+        let vendor = CString::new(info.vendor)?;
+        let chain_name = CString::new(info.chain_name)?;
+        let sapling_activation_height = u32::try_from(info.sapling_activation_height)?;
+        let consensus_branch_id = u32::from_str_radix(&info.consensus_branch_id, 16)?;
+        let block_height = u32::try_from(info.block_height)?;
+        let git_commit = CString::new(info.git_commit)?;
+        let branch = CString::new(info.branch)?;
+        let build_date = CString::new(info.build_date)?;
+        let build_user = CString::new(info.build_user)?;
+        let estimated_height = u32::try_from(info.estimated_height)?;
+        let zcashd_build = CString::new(info.zcashd_build)?;
+        let zcashd_subversion = CString::new(info.zcashd_subversion)?;
+
+        Ok(Box::into_raw(Box::new(Self {
+            version: version.into_raw(),
+            vendor: vendor.into_raw(),
+            taddr_support: info.taddr_support,
+            chain_name: chain_name.into_raw(),
+            sapling_activation_height,
+            consensus_branch_id,
+            block_height,
+            git_commit: git_commit.into_raw(),
+            branch: branch.into_raw(),
+            build_date: build_date.into_raw(),
+            build_user: build_user.into_raw(),
+            estimated_height,
+            zcashd_build: zcashd_build.into_raw(),
+            zcashd_subversion: zcashd_subversion.into_raw(),
+        })))
+    }
+}
+
+/// Frees a [`LightdInfo`] value.
+///
+/// # Safety
+///
+/// - `ptr` must either be null or point to a struct having the layout of [`LightdInfo`].
+#[no_mangle]
+pub unsafe extern "C" fn zcashlc_free_lightd_info(ptr: *mut LightdInfo) {
+    if !ptr.is_null() {
+        let info: Box<LightdInfo> = unsafe { Box::from_raw(ptr) };
+        if !(info.version.is_null()) {
+            unsafe { zcashlc_string_free(info.version) }
+        }
+        if !(info.vendor.is_null()) {
+            unsafe { zcashlc_string_free(info.vendor) }
+        }
+        if !(info.chain_name.is_null()) {
+            unsafe { zcashlc_string_free(info.chain_name) }
+        }
+        if !(info.git_commit.is_null()) {
+            unsafe { zcashlc_string_free(info.git_commit) }
+        }
+        if !(info.branch.is_null()) {
+            unsafe { zcashlc_string_free(info.branch) }
+        }
+        if !(info.build_date.is_null()) {
+            unsafe { zcashlc_string_free(info.build_date) }
+        }
+        if !(info.build_user.is_null()) {
+            unsafe { zcashlc_string_free(info.build_user) }
+        }
+        if !(info.zcashd_build.is_null()) {
+            unsafe { zcashlc_string_free(info.zcashd_build) }
+        }
+        if !(info.zcashd_subversion.is_null()) {
+            unsafe { zcashlc_string_free(info.zcashd_subversion) }
+        }
+        drop(info);
     }
 }

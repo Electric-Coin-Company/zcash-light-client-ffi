@@ -53,6 +53,7 @@ fn main() {
         .rename_item("Address", "FfiAddress")
         .rename_item("AccountMetadataKey", "FfiAccountMetadataKey")
         .rename_item("SymmetricKeys", "FfiSymmetricKeys")
+        .rename_item("SymmetricKeys", "FfiLightdInfo")
         .generate()
     {
         b.write_to_file("target/Headers/zcashlc.h");

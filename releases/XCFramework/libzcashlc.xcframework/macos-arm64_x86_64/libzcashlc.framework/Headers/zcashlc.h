@@ -1643,14 +1643,14 @@ struct FfiBoxedSlice *zcashlc_add_proofs_to_pczt(const uint8_t *pczt_ptr,
  *   function call.
  * - The total size `pczt_with_sigs_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of `pointer::offset`.
- * - `spend_params` must be non-null and valid for reads for `spend_params_len` bytes, and it must
- *   have an alignment of `1`.
+ * - `spend_params` must either be null, or it must be valid for reads for `spend_params_len` bytes
+ *   and have an alignment of `1`.
  * - The memory referenced by `spend_params` must not be mutated for the duration of the function
  *   call.
  * - The total size `spend_params_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of `pointer::offset`.
- * - `output_params` must be non-null and valid for reads for `output_params_len` bytes, and it
- *   must have an alignment of `1`.
+ * - `output_params` must either be null, or it must be valid for reads for `output_params_len`
+ *   bytes and have an alignment of `1`.
  * - The memory referenced by `output_params` must not be mutated for the duration of the function
  *   call.
  * - The total size `output_params_len` must be no larger than `isize::MAX`. See the safety

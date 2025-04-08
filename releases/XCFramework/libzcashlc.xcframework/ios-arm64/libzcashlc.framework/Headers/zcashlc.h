@@ -231,6 +231,8 @@ typedef struct FfiScanProgress {
  *   safety documentation of `pointer::offset`.
  * - `scan_progress` must, if non-null, point to a struct having the layout of
  *   [`ScanProgress`].
+ * - `recovery_progress` must, if non-null, point to a struct having the layout of
+ *   [`ScanProgress`].
  */
 typedef struct FfiWalletSummary {
   struct FfiAccountBalance *account_balances;
@@ -238,6 +240,7 @@ typedef struct FfiWalletSummary {
   int32_t chain_tip_height;
   int32_t fully_scanned_height;
   struct FfiScanProgress *scan_progress;
+  struct FfiScanProgress *recovery_progress;
   uint64_t next_sapling_subtree_index;
   uint64_t next_orchard_subtree_index;
 } FfiWalletSummary;
@@ -1838,6 +1841,35 @@ struct LwdConn *zcashlc_tor_connect_to_lightwalletd(struct TorRuntime *tor_runti
 void zcashlc_free_tor_lwd_conn(struct LwdConn *ptr);
 
 /**
+ * Returns information about this lightwalletd instance and the blockchain.
+ *
+ * # Safety
+ *
+ * - `lwd_conn` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut tor::LwdConn` that has not previously been freed.
+ * - `lwd_conn` must not be passed to two FFI calls at the same time.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_tor_lwd_conn_get_info(struct LwdConn *lwd_conn);
+
+/**
+ * Fetches the height and hash of the block at the tip of the best chain.
+ *
+ * # Safety
+ *
+ * - `lwd_conn` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut tor::LwdConn` that has not previously been freed.
+ * - `lwd_conn` must not be passed to two FFI calls at the same time.
+ * - `height_ret` must be non-null and valid for writes for 4 bytes, and it must have an
+ *   alignment of `1`.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_tor_lwd_conn_latest_block(struct LwdConn *lwd_conn,
+                                                        uint32_t *height_ret);
+
+/**
  * Fetches the transaction with the given ID.
  *
  * # Safety
@@ -1873,6 +1905,20 @@ struct FfiBoxedSlice *zcashlc_tor_lwd_conn_fetch_transaction(struct LwdConn *lwd
 bool zcashlc_tor_lwd_conn_submit_transaction(struct LwdConn *lwd_conn,
                                              const uint8_t *tx,
                                              uintptr_t tx_len);
+
+/**
+ * Fetches the note commitment tree state corresponding to the given block height.
+ *
+ * # Safety
+ *
+ * - `lwd_conn` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut tor::LwdConn` that has not previously been freed.
+ * - `lwd_conn` must not be passed to two FFI calls at the same time.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_tor_lwd_conn_get_tree_state(struct LwdConn *lwd_conn,
+                                                          uint32_t height);
 
 /**
  * Returns the network type and address kind for the given address string,

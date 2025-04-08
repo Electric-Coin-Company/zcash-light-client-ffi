@@ -231,6 +231,8 @@ typedef struct FfiScanProgress {
  *   safety documentation of `pointer::offset`.
  * - `scan_progress` must, if non-null, point to a struct having the layout of
  *   [`ScanProgress`].
+ * - `recovery_progress` must, if non-null, point to a struct having the layout of
+ *   [`ScanProgress`].
  */
 typedef struct FfiWalletSummary {
   struct FfiAccountBalance *account_balances;
@@ -238,6 +240,7 @@ typedef struct FfiWalletSummary {
   int32_t chain_tip_height;
   int32_t fully_scanned_height;
   struct FfiScanProgress *scan_progress;
+  struct FfiScanProgress *recovery_progress;
   uint64_t next_sapling_subtree_index;
   uint64_t next_orchard_subtree_index;
 } FfiWalletSummary;

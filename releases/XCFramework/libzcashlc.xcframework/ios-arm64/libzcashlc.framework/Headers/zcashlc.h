@@ -4,6 +4,21 @@
 #include <stdlib.h>
 
 /**
+ * What level of sleep to put a Tor client into.
+ */
+typedef enum TorDormantMode {
+  /**
+   * The client functions as normal, and background tasks run periodically.
+   */
+  Normal,
+  /**
+   * Background tasks are suspended, conserving CPU usage. Attempts to use the client will
+   * wake it back up again.
+   */
+  Soft,
+} TorDormantMode;
+
+/**
  * A struct that contains a ZIP 325 Account Metadata Key.
  */
 typedef struct FfiAccountMetadataKey FfiAccountMetadataKey;
@@ -1796,6 +1811,23 @@ void zcashlc_free_tor_runtime(struct TorRuntime *ptr);
  *   pointer when done using it.
  */
 struct TorRuntime *zcashlc_tor_isolated_client(struct TorRuntime *tor_runtime);
+
+/**
+ * Changes the client's current dormant mode, putting background tasks to sleep or waking
+ * them up as appropriate.
+ *
+ * This can be used to conserve CPU usage if you aren’t planning on using the client for
+ * a while, especially on mobile platforms.
+ *
+ * See the [`ffi::TorDormantMode`] documentation for more details.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ */
+bool zcashlc_tor_set_dormant(struct TorRuntime *tor_runtime, enum TorDormantMode mode);
 
 /**
  * Fetches the current ZEC-USD exchange rate over Tor.

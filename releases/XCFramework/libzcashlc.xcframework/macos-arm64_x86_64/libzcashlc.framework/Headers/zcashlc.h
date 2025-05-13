@@ -767,7 +767,17 @@ char *zcashlc_get_current_address(const uint8_t *db_data,
 
 /**
  * Returns a newly-generated unified payment address for the specified account, with the next
- * available diversifier.
+ * available diversifier and the specified set of receivers.
+ *
+ * The set of receivers to include in the generated address is specified by a byte which may have
+ * any of the following bits set:
+ * * P2PKH = 0b00000001
+ * * SAPLING = 0b00000100
+ * * ORCHARD = 0b00001000
+ *
+ * For each bit set, a corresponding receiver will be required to be generated. If no
+ * corresponding viewing key exists in the wallet for a required receiver, this will return an
+ * error. At present, p2pkh-only unified addresses are not supported.
  *
  * # Safety
  *
@@ -787,7 +797,8 @@ char *zcashlc_get_current_address(const uint8_t *db_data,
 char *zcashlc_get_next_available_address(const uint8_t *db_data,
                                          uintptr_t db_data_len,
                                          const uint8_t *account_uuid_bytes,
-                                         uint32_t network_id);
+                                         uint32_t network_id,
+                                         uint32_t receiver_flags);
 
 /**
  * Returns a list of the transparent addresses that have been allocated for the provided account,

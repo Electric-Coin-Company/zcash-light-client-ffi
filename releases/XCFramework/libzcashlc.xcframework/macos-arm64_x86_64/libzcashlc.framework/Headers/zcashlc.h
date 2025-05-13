@@ -4,6 +4,43 @@
 #include <stdlib.h>
 
 /**
+ * A type used to filter transactions to be returned in response to a [`TransactionDataRequest`],
+ * in terms of the spentness of the transaction's transparent outputs.
+ *
+ */
+typedef enum OutputStatusFilter {
+  /**
+   * Only transactions that have currently-unspent transparent outputs should be returned.
+   */
+  OutputStatusFilter_Unspent,
+  /**
+   * All transactions corresponding to the data request should be returned, irrespective of
+   * whether or not those transactions produce transparent outputs that are currently unspent.
+   */
+  OutputStatusFilter_All,
+} OutputStatusFilter;
+
+/**
+ * A type describing the mined-ness of transactions that should be returned in response to a
+ * [`TransactionDataRequest`].
+ *
+ */
+typedef enum TransactionStatusFilter {
+  /**
+   * Only mined transactions should be returned.
+   */
+  TransactionStatusFilter_Mined,
+  /**
+   * Only mempool transactions should be returned.
+   */
+  TransactionStatusFilter_Mempool,
+  /**
+   * Both mined transactions and transactions in the mempool should be returned.
+   */
+  TransactionStatusFilter_All,
+} TransactionStatusFilter;
+
+/**
  * A struct that contains a ZIP 325 Account Metadata Key.
  */
 typedef struct FfiAccountMetadataKey FfiAccountMetadataKey;
@@ -428,18 +465,51 @@ enum FfiTransactionDataRequest_Tag {
    *
    * [`GetTaddressTxids`]: crate::proto::service::compact_tx_streamer_client::CompactTxStreamerClient::get_taddress_txids
    */
-  SpendsFromAddress,
+  TransactionsInvolvingAddress,
 };
 typedef uint8_t FfiTransactionDataRequest_Tag;
 
-typedef struct SpendsFromAddress_Body {
+typedef struct TransactionsInvolvingAddress_Body {
+  /**
+   * The address to request transactions and/or UTXOs for.
+   */
   char *address;
+  /**
+   * Only transactions mined at heights greater than or equal to this height should be
+   * returned.
+   */
   uint32_t block_range_start;
   /**
-   * An optional end height; no end height is represented as `-1`
+   * Only transactions mined at heights less than this height should be returned.
+   *
+   * Either a `u32` value, or `-1` representing no end height.
    */
   int64_t block_range_end;
-} SpendsFromAddress_Body;
+  /**
+   * If `request_at` is non-negative, the caller evaluating this request should attempt to
+   * retrieve transaction data related to the specified address at a time that is as close
+   * as practical to the specified instant, and in a fashion that decorrelates this request
+   * to a light wallet server from other requests made by the same caller.
+   *
+   * `-1` is the only negative value, meaning "unset".
+   *
+   * This may be ignored by callers that are able to satisfy the request without exposing
+   * correlations between addresses to untrusted parties; for example, a wallet application
+   * that uses a private, trusted-for-privacy supplier of chain data can safely ignore this
+   * field.
+   */
+  int64_t request_at;
+  /**
+   * The caller should respond to this request only with transactions that conform to the
+   * specified transaction status filter.
+   */
+  enum TransactionStatusFilter tx_status_filter;
+  /**
+   * The caller should respond to this request only with transactions containing outputs
+   * that conform to the specified output status filter.
+   */
+  enum OutputStatusFilter output_status_filter;
+} TransactionsInvolvingAddress_Body;
 
 typedef struct FfiTransactionDataRequest {
   FfiTransactionDataRequest_Tag tag;
@@ -450,7 +520,7 @@ typedef struct FfiTransactionDataRequest {
     struct {
       uint8_t enhancement[32];
     };
-    SpendsFromAddress_Body spends_from_address;
+    TransactionsInvolvingAddress_Body transactions_involving_address;
   };
 } FfiTransactionDataRequest;
 
@@ -767,7 +837,17 @@ char *zcashlc_get_current_address(const uint8_t *db_data,
 
 /**
  * Returns a newly-generated unified payment address for the specified account, with the next
- * available diversifier.
+ * available diversifier and the specified set of receivers.
+ *
+ * The set of receivers to include in the generated address is specified by a byte which may have
+ * any of the following bits set:
+ * * P2PKH = 0b00000001
+ * * SAPLING = 0b00000100
+ * * ORCHARD = 0b00001000
+ *
+ * For each bit set, a corresponding receiver will be required to be generated. If no
+ * corresponding viewing key exists in the wallet for a required receiver, this will return an
+ * error. At present, p2pkh-only unified addresses are not supported.
  *
  * # Safety
  *
@@ -787,7 +867,8 @@ char *zcashlc_get_current_address(const uint8_t *db_data,
 char *zcashlc_get_next_available_address(const uint8_t *db_data,
                                          uintptr_t db_data_len,
                                          const uint8_t *account_uuid_bytes,
-                                         uint32_t network_id);
+                                         uint32_t network_id,
+                                         uint32_t receiver_flags);
 
 /**
  * Returns a list of the transparent addresses that have been allocated for the provided account,

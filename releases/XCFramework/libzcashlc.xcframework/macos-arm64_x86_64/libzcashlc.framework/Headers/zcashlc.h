@@ -21,6 +21,21 @@ typedef enum OutputStatusFilter {
 } OutputStatusFilter;
 
 /**
+ * What level of sleep to put a Tor client into.
+ */
+typedef enum TorDormantMode {
+  /**
+   * The client functions as normal, and background tasks run periodically.
+   */
+  Normal,
+  /**
+   * Background tasks are suspended, conserving CPU usage. Attempts to use the client will
+   * wake it back up again.
+   */
+  Soft,
+} TorDormantMode;
+
+/**
  * A type describing the mined-ness of transactions that should be returned in response to a
  * [`TransactionDataRequest`].
  *
@@ -1398,12 +1413,12 @@ int32_t zcashlc_decrypt_and_store_transaction(const uint8_t *db_data,
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an alignment
- *    of `1`.
+ *   of `1`.
  * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
  *   function call.
  * - `to` must be non-null and must point to a null-terminated UTF-8 string.
  * - `memo` must either be null (indicating an empty memo or a transparent recipient) or point to a
- *    512-byte array.
+ *   512-byte array.
  * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
  *   pointer when done using it.
  */
@@ -1430,7 +1445,7 @@ struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an alignment
- *    of `1`.
+ *   of `1`.
  * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
  *   function call.
  * - `payment_uri` must be non-null and must point to a null-terminated UTF-8 string.
@@ -1494,7 +1509,7 @@ void zcashlc_string_free(char *s);
  * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
  * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an alignment
- *    of `1`.
+ *   of `1`.
  * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
  *   function call.
  * - `shielding_threshold` a non-negative shielding threshold amount in zatoshi
@@ -1825,6 +1840,15 @@ struct FfiTransactionDataRequests *zcashlc_transaction_data_requests(const uint8
  * Detects notes with corrupt witnesses, and adds the block ranges corresponding to the corrupt
  * ranges to the scan queue so that the ordinary scanning process will re-scan these ranges to fix
  * the corruption in question.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
  */
 void zcashlc_fix_witnesses(const uint8_t *db_data, uintptr_t db_data_len, uint32_t network_id);
 
@@ -1877,6 +1901,23 @@ void zcashlc_free_tor_runtime(struct TorRuntime *ptr);
  *   pointer when done using it.
  */
 struct TorRuntime *zcashlc_tor_isolated_client(struct TorRuntime *tor_runtime);
+
+/**
+ * Changes the client's current dormant mode, putting background tasks to sleep or waking
+ * them up as appropriate.
+ *
+ * This can be used to conserve CPU usage if you aren’t planning on using the client for
+ * a while, especially on mobile platforms.
+ *
+ * See the [`ffi::TorDormantMode`] documentation for more details.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ */
+bool zcashlc_tor_set_dormant(struct TorRuntime *tor_runtime, enum TorDormantMode mode);
 
 /**
  * Fetches the current ZEC-USD exchange rate over Tor.

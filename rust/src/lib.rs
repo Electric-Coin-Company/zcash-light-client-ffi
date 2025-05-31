@@ -3,6 +3,7 @@
 use anyhow::anyhow;
 use bitflags::bitflags;
 use ffi_helpers::panic::catch_panic;
+use http_body_util::BodyExt;
 use nonempty::NonEmpty;
 use pczt::{
     Pczt,
@@ -40,6 +41,7 @@ use zcash_client_backend::{
     },
     fees::{SplitPolicy, StandardFeeRule, zip317::MultiOutputChangeStrategy},
     keys::{ReceiverRequirement, UnifiedAddressRequest, UnifiedFullViewingKey},
+    tor::http::HttpError,
 };
 use zcash_client_sqlite::{error::SqliteClientError, util::SystemClock};
 
@@ -3000,6 +3002,57 @@ pub unsafe extern "C" fn zcashlc_tor_set_dormant(
         Ok(true)
     });
     unwrap_exc_or(res, false)
+}
+
+/// Makes an HTTP GET request over Tor.
+///
+/// `retry_limit` is the maximum number of times that a failed request should be retried.
+/// You can disable retries by setting this to 0.
+///
+/// # Safety
+///
+/// - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+///   return type `*mut TorRuntime` that has not previously been freed.
+/// - `tor_runtime` must not be passed to two FFI calls at the same time.
+/// - `url` must be non-null and must point to a null-terminated UTF-8 string.
+/// - Call [`zcashlc_free_http_response_bytes`] to free the memory associated with the
+///   returned pointer when done using it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zcashlc_tor_http_get(
+    tor_runtime: *mut TorRuntime,
+    url: *const c_char,
+    retry_limit: u8,
+) -> *mut ffi::HttpResponseBytes {
+    // SAFETY: Callers would have to do the following for unwind safety (#194):
+    // - using `*mut TorRuntime` and respecting mutability rules on the Swift side, to
+    //   avoid observing the effects of a panic in another thread.
+    // - discarding the `TorRuntime` whenever we get an error that is due to a panic.
+    let tor_runtime = AssertUnwindSafe(tor_runtime);
+
+    let res = catch_panic(|| {
+        let tor_runtime =
+            unsafe { tor_runtime.as_mut() }.ok_or_else(|| anyhow!("A Tor runtime is required"))?;
+
+        let url = unsafe { CStr::from_ptr(url).to_str()? }
+            .try_into()
+            .map_err(|e| anyhow!("Invalid URL: {e}"))?;
+
+        let response = tor_runtime.runtime().block_on(async {
+            tor_runtime
+                .client()
+                .http_get(
+                    url,
+                    |builder| builder,
+                    |body| async { Ok(body.collect().await.map_err(HttpError::from)?.to_bytes()) },
+                    retry_limit,
+                    |_| Some(zcash_client_backend::tor::http::Retry::Same),
+                )
+                .await
+        })?;
+
+        ffi::HttpResponseBytes::from_rust(response)
+    });
+    unwrap_exc_or(res, ptr::null_mut())
 }
 
 /// Fetches the current ZEC-USD exchange rate over Tor.

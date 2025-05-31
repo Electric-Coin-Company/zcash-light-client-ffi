@@ -53,6 +53,8 @@ fn main() {
         .rename_item("Address", "FfiAddress")
         .rename_item("AccountMetadataKey", "FfiAccountMetadataKey")
         .rename_item("SymmetricKeys", "FfiSymmetricKeys")
+        .rename_item("HttpHeader", "FfiHttpHeader")
+        .rename_item("HttpResponseBytes", "FfiHttpResponseBytes")
         .generate()
     {
         b.write_to_file("target/Headers/zcashlc.h");

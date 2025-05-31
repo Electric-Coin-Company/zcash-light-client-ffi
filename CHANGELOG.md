@@ -7,7 +7,10 @@ and this library adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Unreleased
 
 ### Added
+- `FfiHttpHeader`
+- `FfiHttpResponseBytes`
 - `TorDormantMode`
+- `zcashlc_tor_http_get`
 - `zcashlc_tor_set_dormant`
 
 ### Changed

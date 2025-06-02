@@ -562,6 +562,68 @@ typedef struct FfiTransactionDataRequests {
 } FfiTransactionDataRequests;
 
 /**
+ * An HTTP header from a response.
+ *
+ * Memory is managed by Rust.
+ */
+typedef struct FfiHttpResponseHeader {
+  /**
+   * The header name as a C string.
+   */
+  char *name;
+  /**
+   * The header value as a C string.
+   */
+  char *value;
+} FfiHttpResponseHeader;
+
+/**
+ * A struct that contains an HTTP response.
+ */
+typedef struct FfiHttpResponseBytes {
+  /**
+   * The response's status.
+   */
+  uint16_t status;
+  /**
+   * The response's version.
+   */
+  char *version;
+  /**
+   * A pointer to a list of the response's headers.
+   */
+  struct FfiHttpResponseHeader *headers_ptr;
+  /**
+   * The length of the data in `headers_ptr`.
+   */
+  uintptr_t headers_len;
+  /**
+   * A pointer to the HTTP body bytes.
+   */
+  uint8_t *body_ptr;
+  /**
+   * The length of the data in `body_ptr`.
+   */
+  uintptr_t body_len;
+} FfiHttpResponseBytes;
+
+/**
+ * An HTTP header for a request.
+ *
+ * Memory is managed by Swift.
+ */
+typedef struct FfiHttpRequestHeader {
+  /**
+   * The header name as a C string.
+   */
+  const char *name;
+  /**
+   * The header value as a C string.
+   */
+  const char *value;
+} FfiHttpRequestHeader;
+
+/**
  * A decimal suitable for converting into an `NSDecimalNumber`.
  */
 typedef struct Decimal {
@@ -1920,6 +1982,82 @@ struct TorRuntime *zcashlc_tor_isolated_client(struct TorRuntime *tor_runtime);
 bool zcashlc_tor_set_dormant(struct TorRuntime *tor_runtime, enum TorDormantMode mode);
 
 /**
+ * Makes an HTTP GET request over Tor.
+ *
+ * `retry_limit` is the maximum number of times that a failed request should be retried.
+ * You can disable retries by setting this to 0.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ * - `url` must be non-null and must point to a null-terminated UTF-8 string.
+ * - `headers` must be non-null and valid for reads for
+ *   `headers_len * size_of::<ffi::HttpRequestHeader>()` bytes, and it must be properly
+ *   aligned. This means in particular:
+ *   - The entire memory range of this slice must be contained within a single allocated
+ *     object! Slices can never span across multiple allocated objects.
+ *   - `headers` must be non-null and aligned even for zero-length slices.
+ * - `headers` must point to `headers_len` consecutive properly initialized values of
+ *   type `ffi::HttpRequestHeader`.
+ * - The memory referenced by `headers` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `headers_len * size_of::<ffi::HttpRequestHeader>()` of the slice must
+ *   be no larger than `isize::MAX`, and adding that size to `headers` must not "wrap
+ *   around" the address space.  See the safety documentation of pointer::offset.
+ * - Call [`zcashlc_free_http_response_bytes`] to free the memory associated with the
+ *   returned pointer when done using it.
+ */
+struct FfiHttpResponseBytes *zcashlc_tor_http_get(struct TorRuntime *tor_runtime,
+                                                  const char *url,
+                                                  const struct FfiHttpRequestHeader *headers,
+                                                  uintptr_t headers_len,
+                                                  uint8_t retry_limit);
+
+/**
+ * Makes an HTTP POST request over Tor.
+ *
+ * `retry_limit` is the maximum number of times that a failed request should be retried.
+ * You can disable retries by setting this to 0.
+ *
+ * # Safety
+ *
+ * - `tor_runtime` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut TorRuntime` that has not previously been freed.
+ * - `tor_runtime` must not be passed to two FFI calls at the same time.
+ * - `url` must be non-null and must point to a null-terminated UTF-8 string.
+ * - `headers` must be non-null and valid for reads for
+ *   `headers_len * size_of::<ffi::HttpRequestHeader>()` bytes, and it must be properly
+ *   aligned. This means in particular:
+ *   - The entire memory range of this slice must be contained within a single allocated
+ *     object! Slices can never span across multiple allocated objects.
+ *   - `headers` must be non-null and aligned even for zero-length slices.
+ * - `headers` must point to `headers_len` consecutive properly initialized values of
+ *   type `ffi::HttpRequestHeader`.
+ * - The memory referenced by `headers` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `headers_len * size_of::<ffi::HttpRequestHeader>()` of the slice must
+ *   be no larger than `isize::MAX`, and adding that size to `headers` must not "wrap
+ *   around" the address space.  See the safety documentation of pointer::offset.
+ * - `body` must be non-null and valid for reads for `body_len` bytes, and it must have
+ *   an alignment of `1`.
+ * - The memory referenced by `body` must not be mutated for the duration of the function
+ *   call.
+ * - The total size `body_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - Call [`zcashlc_free_http_response_bytes`] to free the memory associated with the
+ *   returned pointer when done using it.
+ */
+struct FfiHttpResponseBytes *zcashlc_tor_http_post(struct TorRuntime *tor_runtime,
+                                                   const char *url,
+                                                   const struct FfiHttpRequestHeader *headers,
+                                                   uintptr_t headers_len,
+                                                   const uint8_t *body,
+                                                   uintptr_t body_len,
+                                                   uint8_t retry_limit);
+
+/**
  * Fetches the current ZEC-USD exchange rate over Tor.
  *
  * The result is a [`Decimal`] struct containing the fields necessary to construct an
@@ -2493,3 +2631,12 @@ void zcashlc_free_ffi_address(struct FfiAddress *ptr);
  * - `ptr` must either be null or point to a struct having the layout of [`AccountMetadataKey`].
  */
 void zcashlc_free_account_metadata_key(struct FfiAccountMetadataKey *ptr);
+
+/**
+ * Frees an HttpResponseBytes value
+ *
+ * # Safety
+ *
+ * - `ptr` must either be null or point to a struct having the layout of [`HttpResponseBytes`].
+ */
+void zcashlc_free_http_response_bytes(struct FfiHttpResponseBytes *ptr);

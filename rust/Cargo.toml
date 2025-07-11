@@ -16,9 +16,9 @@ build = "build.rs"
 # Zcash
 orchard = "0.11"
 sapling = { package = "sapling-crypto", version = "0.5", default-features = false }
-transparent = { package = "zcash_transparent", version = "0.3", default-features = false }
-zcash_address = { version = "0.8" }
-zcash_client_backend = { version = "0.19", features = [
+transparent = { package = "zcash_transparent", git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63", default-features = false }
+zcash_address = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63" }
+zcash_client_backend = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63", features = [
     "lightwalletd-tonic-tls-webpki-roots",
     "orchard",
     "pczt",
@@ -26,13 +26,13 @@ zcash_client_backend = { version = "0.19", features = [
     "transparent-inputs",
     "unstable",
 ] }
-zcash_client_sqlite = { version = "0.17", features = ["orchard", "transparent-inputs", "unstable", "serde"] }
+zcash_client_sqlite = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63", features = ["orchard", "transparent-inputs", "unstable", "serde"] }
 zcash_note_encryption = "0.4.1"
-zcash_primitives = "0.23"
-zcash_proofs = "0.23"
-zcash_protocol = "0.5"
+zcash_primitives = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63" }
+zcash_proofs = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63" }
+zcash_protocol = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63" }
 zip32 = "0.2"
-pczt = { version = "0.3", features = ["prover"] }
+pczt = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63", features = ["prover"] }
 
 # Infrastructure
 prost = "0.13"

@@ -3,7 +3,7 @@ name = "libzcashlc"
 version = "0.17.0"
 authors = [
     "Jack Grigg <jack@electriccoin.co>",
-    "Francisco Gindre",
+    "Pacu Gindre <pacu@thecodebuffet.dev>",
     "Lukas Korba <lukas@tangiblecodes.com>",
 ]
 license = "MIT"
@@ -16,9 +16,9 @@ build = "build.rs"
 # Zcash
 orchard = "0.11"
 sapling = { package = "sapling-crypto", version = "0.5", default-features = false }
-transparent = { package = "zcash_transparent", git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63", default-features = false }
-zcash_address = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63" }
-zcash_client_backend = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63", features = [
+transparent = { package = "zcash_transparent", git = "https://github.com/pacu/librustzcash", rev = "61e1ad0ccb0dc342e0490ea7924f0d9ab7f5df5c", default-features = false }
+zcash_address = { git = "https://github.com/pacu/librustzcash", rev = "61e1ad0ccb0dc342e0490ea7924f0d9ab7f5df5c" }
+zcash_client_backend = { git = "https://github.com/pacu/librustzcash", rev = "61e1ad0ccb0dc342e0490ea7924f0d9ab7f5df5c", features = [
     "lightwalletd-tonic-tls-webpki-roots",
     "orchard",
     "pczt",
@@ -26,13 +26,13 @@ zcash_client_backend = { git = "http://github.com/pacu/librustzcash", rev = "122
     "transparent-inputs",
     "unstable",
 ] }
-zcash_client_sqlite = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63", features = ["orchard", "transparent-inputs", "unstable", "serde"] }
+zcash_client_sqlite = { git = "https://github.com/pacu/librustzcash", rev = "61e1ad0ccb0dc342e0490ea7924f0d9ab7f5df5c", features = ["orchard", "transparent-inputs", "unstable", "serde"] }
 zcash_note_encryption = "0.4.1"
-zcash_primitives = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63" }
-zcash_proofs = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63" }
-zcash_protocol = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63" }
+zcash_primitives = { git = "https://github.com/pacu/librustzcash", rev = "61e1ad0ccb0dc342e0490ea7924f0d9ab7f5df5c" }
+zcash_proofs = { git = "https://github.com/pacu/librustzcash", rev = "61e1ad0ccb0dc342e0490ea7924f0d9ab7f5df5c" }
+zcash_protocol = { git = "https://github.com/pacu/librustzcash", rev = "61e1ad0ccb0dc342e0490ea7924f0d9ab7f5df5c" }
 zip32 = "0.2"
-pczt = { git = "http://github.com/pacu/librustzcash", rev = "12291b92e74350dcd6c407bd50c58ee2fc4b5e63", features = ["prover"] }
+pczt = { git = "https://github.com/pacu/librustzcash", rev = "61e1ad0ccb0dc342e0490ea7924f0d9ab7f5df5c", features = ["prover"] }
 
 # Infrastructure
 prost = "0.13"

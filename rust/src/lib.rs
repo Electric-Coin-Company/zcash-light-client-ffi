@@ -36,10 +36,13 @@ use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 use zcash_client_backend::{
     data_api::{
-        AccountPurpose, TransactionStatus, Zip32Derivation,
-        wallet::extract_and_store_transaction_from_pczt,
+        wallet::{extract_and_store_transaction_from_pczt, ConfirmationsPolicy}, AccountPurpose, MaxSpendMode, TransactionStatus, Zip32Derivation
     },
-    fees::{SplitPolicy, StandardFeeRule, zip317::{MultiOutputChangeStrategy, SingleOutputChangeStrategy}},
+    fees::{
+        StandardFeeRule,
+        zip317::MultiOutputChangeStrategy,
+        SplitPolicy,
+    },
     keys::{ReceiverRequirement, UnifiedAddressRequest, UnifiedFullViewingKey},
     tor::http::HttpError,
 };
@@ -76,7 +79,6 @@ use zcash_primitives::{
     consensus::{
         BlockHeight, BranchId, Network,
         Network::{MainNetwork, TestNetwork},
-        Parameters,
     },
     memo::MemoBytes,
     merkle_tree::HashSer,
@@ -895,6 +897,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance(
         let network = parse_network(network_id)?;
         let min_confirmations = NonZeroU32::new(min_confirmations)
             .ok_or(anyhow!("min_confirmations should be non-zero"))?;
+        let confirmations_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false);
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let addr = unsafe { CStr::from_ptr(address).to_str()? };
         let taddr = TransparentAddress::decode(&network, addr).unwrap();
@@ -908,13 +911,13 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance(
             })
             .and_then(|target| {
                 db_data
-                    .get_spendable_transparent_outputs(&taddr, target, 0)
+                    .get_spendable_transparent_outputs(&taddr, target, confirmations_policy)
                     .map_err(|e| {
                         anyhow!("Error while fetching verified transparent balance: {}", e)
                     })
             })?
             .iter()
-            .map(|utxo| utxo.txout().value)
+            .map(|utxo| utxo.txout().value())
             .sum::<Option<Zatoshis>>()
             .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
@@ -951,6 +954,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let account_uuid = account_uuid_from_bytes(account_uuid_bytes)?;
 
+        let confirmation_policy = ConfirmationsPolicy::new_symmetrical(NonZeroU32::new(min_confirmations).expect("min_confirmations should be non-zero"), false);
         let amount = db_data
             .get_target_and_anchor_heights(NonZeroU32::MIN)
             .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
@@ -977,7 +981,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
                                     .get_spendable_transparent_outputs(
                                         taddr,
                                         target,
-                                        min_confirmations,
+                                        confirmation_policy,
                                     )
                                     .map_err(|e| {
                                         anyhow!(
@@ -991,7 +995,7 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
             })?
             .iter()
             .flatten()
-            .map(|utxo| utxo.txout().value)
+            .map(|utxo| utxo.txout().value())
             .sum::<Option<Zatoshis>>()
             .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
@@ -1034,11 +1038,11 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance(
             })
             .and_then(|target| {
                 db_data
-                    .get_spendable_transparent_outputs(&taddr, target, 0)
+                    .get_spendable_transparent_outputs(&taddr, target, ConfirmationsPolicy::default())
                     .map_err(|e| anyhow!("Error while fetching total transparent balance: {}", e))
             })?
             .iter()
-            .map(|utxo| utxo.txout().value)
+            .map(|utxo| utxo.txout().value())
             .sum::<Option<Zatoshis>>()
             .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
@@ -1083,7 +1087,7 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance_for_account(
             })
             .and_then(|anchor| {
                 db_data
-                    .get_transparent_balances(account_uuid, anchor)
+                    .get_transparent_balances(account_uuid, anchor, ConfirmationsPolicy::default())
                     .map_err(|e| {
                         anyhow!(
                             "Error while fetching transparent balances for {:?}: {}",
@@ -1093,6 +1097,7 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance_for_account(
                     })
             })?
             .values()
+            .map(|b| b.total())
             .sum::<Option<Zatoshis>>()
             .ok_or_else(|| anyhow!("Balance overflowed MAX_MONEY."))?;
 
@@ -1497,9 +1502,10 @@ pub unsafe extern "C" fn zcashlc_get_wallet_summary(
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-
+        let min_confirmations = NonZeroU32::new(min_confirmations).expect("`min_confirmations` is not zero");
+        let confirmations_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false); 
         match db_data
-            .get_wallet_summary(min_confirmations)
+            .get_wallet_summary(confirmations_policy)
             .map_err(|e| anyhow!("Error while fetching wallet summary: {}", e))?
         {
             Some(summary) => ffi::WalletSummary::some(summary),
@@ -1677,11 +1683,11 @@ pub unsafe extern "C" fn zcashlc_put_utxo(
 
         let output = WalletTransparentOutput::from_parts(
             OutPoint::new(txid, index as u32),
-            TxOut {
-                value: Zatoshis::from_nonnegative_i64(value)
+            TxOut::new(
+                Zatoshis::from_nonnegative_i64(value)
                     .map_err(|_| anyhow!("Invalid UTXO value"))?,
                 script_pubkey,
-            },
+            ),
             Some(BlockHeight::from(height as u32)),
         )
         .ok_or_else(|| {
@@ -2004,6 +2010,7 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
         ])
         .map_err(|e| anyhow!("Error creating transaction request: {:?}", e))?;
 
+        let confirmations_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false);
         let proposal = propose_transfer::<_, _, _, _, Infallible>(
             &mut db_data,
             &network,
@@ -2011,7 +2018,7 @@ pub unsafe extern "C" fn zcashlc_propose_transfer(
             &input_selector,
             &change_strategy,
             req,
-            min_confirmations,
+            confirmations_policy,
         )
         .map_err(|e| anyhow!("Error while sending funds: {}", e))?;
 
@@ -2067,9 +2074,6 @@ pub unsafe extern "C" fn zcashlc_propose_send_max_transfer(
             .parse()
             .map_err(|e| anyhow!("Can't parse recipient address: {}", e))?;
 
-        let addr = to.convert_if_network::<Address>(network.network_type())
-            .map_err(|e| anyhow!("Can't parse recipient address: {}", e))?;
-
         let memo = if memo.is_null() {
             Ok(None)
         } else {
@@ -2078,25 +2082,19 @@ pub unsafe extern "C" fn zcashlc_propose_send_max_transfer(
                 .map_err(|e| anyhow!("Invalid MemoBytes: {}", e))
         }?;
 
-        let change_strategy = SingleOutputChangeStrategy::new(
-            StandardFeeRule::Zip317,
-            None,
-            ShieldedProtocol::Orchard,
-            DustOutputPolicy::default(),
-        );
-        let input_selector = GreedyInputSelector::new();
+        
+        let confirmation_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false);
 
-
-        let proposal = propose_send_max_transfer::<_, _, _, _, Infallible>(
+        let proposal = propose_send_max_transfer::<_, _, _, Infallible>(
             &mut db_data,
             &network,
             account_uuid,
             &[ShieldedProtocol::Sapling, ShieldedProtocol::Orchard],
-            &input_selector,
-            &change_strategy,
-            &addr,
+            &StandardFeeRule::Zip317,
+            to,
             memo,
-            min_confirmations,
+            MaxSpendMode::MaxSpendable,
+            confirmation_policy
         )
         .map_err(|e| anyhow!("Error while sending funds: {}", e))?;
 
@@ -2151,7 +2149,7 @@ pub unsafe extern "C" fn zcashlc_propose_transfer_from_uri(
 
         let req = TransactionRequest::from_uri(payment_uri_str)
             .map_err(|e| anyhow!("Error creating transaction request: {:?}", e))?;
-
+        let confirmations_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false);
         let proposal = propose_transfer::<_, _, _, _, Infallible>(
             &mut db_data,
             &network,
@@ -2159,7 +2157,7 @@ pub unsafe extern "C" fn zcashlc_propose_transfer_from_uri(
             &input_selector,
             &change_strategy,
             req,
-            min_confirmations,
+            confirmations_policy,
         )
         .map_err(|e| anyhow!("Error while sending funds: {}", e))?;
 
@@ -2250,7 +2248,9 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
+        let min_confirmations = NonZeroU32::new(min_confirmations).expect("`min_confirmations`is not zero");
 
+        let confirmations_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false);
         let account_uuid = account_uuid_from_bytes(account_uuid_bytes)?;
 
         let memo_bytes = if memo.is_null() {
@@ -2299,7 +2299,7 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
             })
             .and_then(|anchor| {
                 db_data
-                    .get_transparent_balances(account_uuid, anchor)
+                    .get_transparent_balances(account_uuid, anchor, confirmations_policy)
                     .map_err(|e| {
                         anyhow!(
                             "Error while fetching transparent balances for {:?}: {}",
@@ -2317,11 +2317,11 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
             Some(addr) => account_receivers
                 .get(&addr)
                 .into_iter()
-                .filter_map(|v| (*v >= shielding_threshold).then_some(addr))
+                .filter_map(|v| (v.spendable_value() >= shielding_threshold).then_some(addr))
                 .collect(),
             None => account_receivers
                 .into_iter()
-                .filter_map(|(a, v)| (v >= shielding_threshold).then_some(a))
+                .filter_map(|(a, v)| (v.spendable_value() >= shielding_threshold).then_some(a))
                 .collect(),
         };
 
@@ -2338,7 +2338,7 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
             shielding_threshold,
             &from_addrs,
             account_uuid,
-            min_confirmations,
+            confirmations_policy,
         )
         .map_err(|e| anyhow!("Error while shielding transaction: {}", e))?;
 
@@ -2896,14 +2896,15 @@ pub unsafe extern "C" fn zcashlc_transaction_data_requests(
                     TransactionDataRequest::Enhancement(txid) => {
                         ffi::TransactionDataRequest::Enhancement(txid.into())
                     }
-                    TransactionDataRequest::TransactionsInvolvingAddress {
-                        address,
-                        block_range_start,
-                        block_range_end,
-                        request_at,
-                        tx_status_filter,
-                        output_status_filter,
-                    } => ffi::TransactionDataRequest::TransactionsInvolvingAddress {
+                    TransactionDataRequest::TransactionsInvolvingAddress(txia)
+                    => {
+                        let address = txia.address();
+                        let block_range_start = txia.block_range_start();
+                        let block_range_end = txia.block_range_end();
+                        let request_at = txia.request_at();
+                        let tx_status_filter = txia.tx_status_filter();
+                        let output_status_filter = txia.output_status_filter();
+                        ffi::TransactionDataRequest::TransactionsInvolvingAddress {
                         address: CString::new(address.encode(&network)).unwrap().into_raw(),
                         block_range_start: block_range_start.into(),
                         block_range_end: block_range_end.map_or(-1, |h| u32::from(h).into()),
@@ -2914,10 +2915,11 @@ pub unsafe extern "C" fn zcashlc_transaction_data_requests(
                                 .try_into()
                                 .expect("we have time before a SystemTime overflows i64")
                         }),
-                        tx_status_filter: ffi::TransactionStatusFilter::from_rust(tx_status_filter),
+                        tx_status_filter: ffi::TransactionStatusFilter::from_rust(tx_status_filter.clone()),
                         output_status_filter: ffi::OutputStatusFilter::from_rust(
-                            output_status_filter,
+                            output_status_filter.clone(),
                         ),
+                        }
                     },
                 })
                 .collect(),

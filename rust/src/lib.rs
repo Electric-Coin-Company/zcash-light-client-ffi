@@ -36,13 +36,10 @@ use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 use zcash_client_backend::{
     data_api::{
-        wallet::{extract_and_store_transaction_from_pczt, ConfirmationsPolicy}, AccountPurpose, MaxSpendMode, TransactionStatus, Zip32Derivation
+        AccountPurpose, MaxSpendMode, TransactionStatus, Zip32Derivation,
+        wallet::{ConfirmationsPolicy, extract_and_store_transaction_from_pczt},
     },
-    fees::{
-        StandardFeeRule,
-        zip317::MultiOutputChangeStrategy,
-        SplitPolicy,
-    },
+    fees::{SplitPolicy, StandardFeeRule, zip317::MultiOutputChangeStrategy},
     keys::{ReceiverRequirement, UnifiedAddressRequest, UnifiedFullViewingKey},
     tor::http::HttpError,
 };
@@ -58,7 +55,8 @@ use zcash_client_backend::{
         scanning::ScanPriority,
         wallet::{
             create_pczt_from_proposal, create_proposed_transactions, decrypt_and_store_transaction,
-            input_selection::GreedyInputSelector, propose_send_max_transfer, propose_shielding, propose_transfer,
+            input_selection::GreedyInputSelector, propose_send_max_transfer, propose_shielding,
+            propose_transfer,
         },
     },
     encoding::AddressCodec,
@@ -954,7 +952,10 @@ pub unsafe extern "C" fn zcashlc_get_verified_transparent_balance_for_account(
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
         let account_uuid = account_uuid_from_bytes(account_uuid_bytes)?;
 
-        let confirmation_policy = ConfirmationsPolicy::new_symmetrical(NonZeroU32::new(min_confirmations).expect("min_confirmations should be non-zero"), false);
+        let confirmation_policy = ConfirmationsPolicy::new_symmetrical(
+            NonZeroU32::new(min_confirmations).expect("min_confirmations should be non-zero"),
+            false,
+        );
         let amount = db_data
             .get_target_and_anchor_heights(NonZeroU32::MIN)
             .map_err(|e| anyhow!("Error while fetching anchor height: {}", e))
@@ -1038,7 +1039,11 @@ pub unsafe extern "C" fn zcashlc_get_total_transparent_balance(
             })
             .and_then(|target| {
                 db_data
-                    .get_spendable_transparent_outputs(&taddr, target, ConfirmationsPolicy::default())
+                    .get_spendable_transparent_outputs(
+                        &taddr,
+                        target,
+                        ConfirmationsPolicy::default(),
+                    )
                     .map_err(|e| anyhow!("Error while fetching total transparent balance: {}", e))
             })?
             .iter()
@@ -1502,8 +1507,9 @@ pub unsafe extern "C" fn zcashlc_get_wallet_summary(
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-        let min_confirmations = NonZeroU32::new(min_confirmations).expect("`min_confirmations` is not zero");
-        let confirmations_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false); 
+        let min_confirmations =
+            NonZeroU32::new(min_confirmations).expect("`min_confirmations` is not zero");
+        let confirmations_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false);
         match db_data
             .get_wallet_summary(confirmations_policy)
             .map_err(|e| anyhow!("Error while fetching wallet summary: {}", e))?
@@ -1684,8 +1690,7 @@ pub unsafe extern "C" fn zcashlc_put_utxo(
         let output = WalletTransparentOutput::from_parts(
             OutPoint::new(txid, index as u32),
             TxOut::new(
-                Zatoshis::from_nonnegative_i64(value)
-                    .map_err(|_| anyhow!("Invalid UTXO value"))?,
+                Zatoshis::from_nonnegative_i64(value).map_err(|_| anyhow!("Invalid UTXO value"))?,
                 script_pubkey,
             ),
             Some(BlockHeight::from(height as u32)),
@@ -2068,7 +2073,6 @@ pub unsafe extern "C" fn zcashlc_propose_send_max_transfer(
 
         let account_uuid = account_uuid_from_bytes(account_uuid_bytes)?;
         let to = unsafe { CStr::from_ptr(to) }.to_str()?;
-        
 
         let to: ZcashAddress = to
             .parse()
@@ -2082,7 +2086,6 @@ pub unsafe extern "C" fn zcashlc_propose_send_max_transfer(
                 .map_err(|e| anyhow!("Invalid MemoBytes: {}", e))
         }?;
 
-        
         let confirmation_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false);
 
         let proposal = propose_send_max_transfer::<_, _, _, Infallible>(
@@ -2094,7 +2097,7 @@ pub unsafe extern "C" fn zcashlc_propose_send_max_transfer(
             to,
             memo,
             MaxSpendMode::MaxSpendable,
-            confirmation_policy
+            confirmation_policy,
         )
         .map_err(|e| anyhow!("Error while sending funds: {}", e))?;
 
@@ -2248,7 +2251,8 @@ pub unsafe extern "C" fn zcashlc_propose_shielding(
     let res = catch_panic(|| {
         let network = parse_network(network_id)?;
         let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
-        let min_confirmations = NonZeroU32::new(min_confirmations).expect("`min_confirmations`is not zero");
+        let min_confirmations =
+            NonZeroU32::new(min_confirmations).expect("`min_confirmations`is not zero");
 
         let confirmations_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false);
         let account_uuid = account_uuid_from_bytes(account_uuid_bytes)?;
@@ -2896,8 +2900,7 @@ pub unsafe extern "C" fn zcashlc_transaction_data_requests(
                     TransactionDataRequest::Enhancement(txid) => {
                         ffi::TransactionDataRequest::Enhancement(txid.into())
                     }
-                    TransactionDataRequest::TransactionsInvolvingAddress(txia)
-                    => {
+                    TransactionDataRequest::TransactionsInvolvingAddress(txia) => {
                         let address = txia.address();
                         let block_range_start = txia.block_range_start();
                         let block_range_end = txia.block_range_end();
@@ -2905,22 +2908,24 @@ pub unsafe extern "C" fn zcashlc_transaction_data_requests(
                         let tx_status_filter = txia.tx_status_filter();
                         let output_status_filter = txia.output_status_filter();
                         ffi::TransactionDataRequest::TransactionsInvolvingAddress {
-                        address: CString::new(address.encode(&network)).unwrap().into_raw(),
-                        block_range_start: block_range_start.into(),
-                        block_range_end: block_range_end.map_or(-1, |h| u32::from(h).into()),
-                        request_at: request_at.map_or(-1, |t| {
-                            t.duration_since(UNIX_EPOCH)
-                                .expect("SystemTime should never be before the epoch")
-                                .as_secs()
-                                .try_into()
-                                .expect("we have time before a SystemTime overflows i64")
-                        }),
-                        tx_status_filter: ffi::TransactionStatusFilter::from_rust(tx_status_filter.clone()),
-                        output_status_filter: ffi::OutputStatusFilter::from_rust(
-                            output_status_filter.clone(),
-                        ),
+                            address: CString::new(address.encode(&network)).unwrap().into_raw(),
+                            block_range_start: block_range_start.into(),
+                            block_range_end: block_range_end.map_or(-1, |h| u32::from(h).into()),
+                            request_at: request_at.map_or(-1, |t| {
+                                t.duration_since(UNIX_EPOCH)
+                                    .expect("SystemTime should never be before the epoch")
+                                    .as_secs()
+                                    .try_into()
+                                    .expect("we have time before a SystemTime overflows i64")
+                            }),
+                            tx_status_filter: ffi::TransactionStatusFilter::from_rust(
+                                tx_status_filter.clone(),
+                            ),
+                            output_status_filter: ffi::OutputStatusFilter::from_rust(
+                                output_status_filter.clone(),
+                            ),
                         }
-                    },
+                    }
                 })
                 .collect(),
         ))

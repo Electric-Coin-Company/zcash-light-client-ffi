@@ -199,10 +199,11 @@ By making a contribution to this project, I certify that:
 - Create a branch named `hotfix/X.Y.Z` starting from the tag `X.Y.Z-1`.
 - Create the hotfix commits.
 - Open a PR for that branch, targeting `main`.
-  - CI will create a preview build in the branch `preview/hotfix/X.Y.Z`. 
+  - CI will create a preview build in the branch `preview/hotfix/X.Y.Z`.
 - Review the changes, and test the preview build as appropriate.
-- Rebuild the production binaries locally from the tip of `hotfix/X.Y.Z`.
-  Commit them and push the commit to `hotfix/X.Y.Z`.
+- Rebuild the production binaries locally (using the production release
+  building laptop with the correct Xcode version) from the tip of
+  `hotfix/X.Y.Z`. Commit them and push the commit to `hotfix/X.Y.Z`.
 - Tag the tip of `hotfix/X.Y.Z` (the binary rebuild commit) as `X.Y.Z`.
 - **IF THERE ARE MERGE CONFLICTS, TAKE CARE WHEN RESOLVING THEM!!!**
   - The merge conflict will almost certainly be in the binary build; you

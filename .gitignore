@@ -11,3 +11,6 @@ Products/
 
 # These are SPM generated files
 .swiftpm
+
+# build from swift-package
+.build

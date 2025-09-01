@@ -37,10 +37,12 @@ use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 use zcash_client_backend::{
     data_api::{
-        AccountPurpose, TransactionStatus, Zip32Derivation,
-        wallet::{self, SpendingKeys, extract_and_store_transaction_from_pczt},
+        AccountPurpose, MaxSpendMode, TransactionStatus, Zip32Derivation,
+        wallet::{
+            self, ConfirmationsPolicy, SpendingKeys, extract_and_store_transaction_from_pczt,
+        },
     },
-    fees::{SplitPolicy, StandardFeeRule, zip317::{MultiOutputChangeStrategy, SingleOutputChangeStrategy}},
+    fees::{SplitPolicy, StandardFeeRule, zip317::MultiOutputChangeStrategy},
     keys::{ReceiverRequirement, UnifiedAddressRequest, UnifiedFullViewingKey},
     tor::http::HttpError,
 };
@@ -56,7 +58,8 @@ use zcash_client_backend::{
         scanning::ScanPriority,
         wallet::{
             create_pczt_from_proposal, create_proposed_transactions, decrypt_and_store_transaction,
-            input_selection::GreedyInputSelector, propose_send_max_transfer, propose_shielding, propose_transfer,
+            input_selection::GreedyInputSelector, propose_send_max_transfer, propose_shielding,
+            propose_transfer,
         },
     },
     encoding::AddressCodec,
@@ -77,7 +80,6 @@ use zcash_primitives::{
     consensus::{
         BlockHeight, BranchId, Network,
         Network::{MainNetwork, TestNetwork},
-        Parameters,
     },
     memo::MemoBytes,
     merkle_tree::HashSer,
@@ -2041,13 +2043,9 @@ pub unsafe extern "C" fn zcashlc_propose_send_max_transfer(
 
         let account_uuid = account_uuid_from_bytes(account_uuid_bytes)?;
         let to = unsafe { CStr::from_ptr(to) }.to_str()?;
-        
 
         let to: ZcashAddress = to
             .parse()
-            .map_err(|e| anyhow!("Can't parse recipient address: {}", e))?;
-
-        let addr = to.convert_if_network::<Address>(network.network_type())
             .map_err(|e| anyhow!("Can't parse recipient address: {}", e))?;
 
         let memo = if memo.is_null() {
@@ -2058,25 +2056,18 @@ pub unsafe extern "C" fn zcashlc_propose_send_max_transfer(
                 .map_err(|e| anyhow!("Invalid MemoBytes: {}", e))
         }?;
 
-        let change_strategy = SingleOutputChangeStrategy::new(
-            StandardFeeRule::Zip317,
-            None,
-            ShieldedProtocol::Orchard,
-            DustOutputPolicy::default(),
-        );
-        let input_selector = GreedyInputSelector::new();
+        let confirmation_policy = ConfirmationsPolicy::new_symmetrical(min_confirmations, false);
 
-
-        let proposal = propose_send_max_transfer::<_, _, _, _, Infallible>(
+        let proposal = propose_send_max_transfer::<_, _, _, Infallible>(
             &mut db_data,
             &network,
             account_uuid,
             &[ShieldedProtocol::Sapling, ShieldedProtocol::Orchard],
-            &input_selector,
-            &change_strategy,
-            &addr,
+            &StandardFeeRule::Zip317,
+            to,
             memo,
-            min_confirmations,
+            MaxSpendMode::MaxSpendable,
+            confirmation_policy,
         )
         .map_err(|e| anyhow!("Error while sending funds: {}", e))?;
 

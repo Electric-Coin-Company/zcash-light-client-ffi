@@ -173,13 +173,19 @@ typedef struct FFIEncodedKeys {
  */
 typedef struct ConfirmationsPolicy {
   /**
-   * NonZero, zero for default
+   * The number of confirmations required before trusted notes may be spent. NonZero, set this
+   * and `untrusted` to zero to accept the default value for each.
    */
   uint32_t trusted;
   /**
-   * NonZero, zero for default, zero must match `trusted`
+   * The number of confirmations required before untrusted notes may be spent. NonZero, set this
+   * and `trusted` both to zero to accept the default value for each.
    */
   uint32_t untrusted;
+  /**
+   * A flag that enables selection of zero-conf transparent UTXOs for spends in shielding
+   * transactions.
+   */
   bool allow_zero_conf_shielding;
 } ConfirmationsPolicy;
 

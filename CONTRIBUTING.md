@@ -192,5 +192,65 @@ By making a contribution to this project, I certify that:
       this project or the open source license(s) involved.
 
 
+## Development and Release Process
+
+At the start of each development cycle, create a branch named
+`release/X.Y.0` starting from `main`, and push it to the repository.
+
+- CI will create a preview build in the branch `preview/release/X.Y.0`,
+  covering whatever happened to be in `main`.
+
+Then, for each feature or change being worked on for this release cycle:
+
+- Create a branch named `feature/some-slug` starting from the latest
+  contents of `release/X.Y.0`.
+- Create commits on the branch.
+- Open a PR for that branch, targeting `release/X.Y.0`.
+  - CI will create a preview build in the branch
+    `preview/feature/some-slug`.
+- Review the changes, and test the preview build as appropriate.
+- Merge the PR.
+- CI will update the `preview/release/X.Y.0` branch with a new preview
+  build.
+
+After the first feature PR is merged, open a draft PR for `release/X.Y.0`
+targeting `main`. This PR can be used to monitor / review the overall
+release contents.
+
+Once all changes for the release have been made:
+
+- Mark the PR for `release/X.Y.0` as ready for review, and review it as
+  necessary (most review will have been done on the feature PRs).
+- Rebuild the production binaries locally (using the production release
+  building laptop with the correct Xcode version) from the tip of
+  `release/X.Y.0`. Commit them and push the commit to `release/X.Y.0`.
+- Tag the tip of `release/X.Y.0` (the binary rebuild commit) as `X.Y.0`.
+- **IF THERE ARE MERGE CONFLICTS, TAKE CARE WHEN RESOLVING THEM!!!**
+  - The merge conflict will almost certainly be in the binary build; you
+    need to keep the binaries for whichever side of the merge will be the
+    version in `main` post-merge (likely the highest version number).
+  - The merge conflict resolution **MUST NOT** alter or rebase any commit
+    below or at the tag `X.Y.0`.
+- Merge the PR.
+
+### Hotfix Process
+
+- Create a branch named `hotfix/X.Y.Z` starting from the tag `X.Y.Z-1`.
+- Create the hotfix commits.
+- Open a PR for that branch, targeting `main`.
+  - CI will create a preview build in the branch `preview/hotfix/X.Y.Z`.
+- Review the changes, and test the preview build as appropriate.
+- Rebuild the production binaries locally (using the production release
+  building laptop with the correct Xcode version) from the tip of
+  `hotfix/X.Y.Z`. Commit them and push the commit to `hotfix/X.Y.Z`.
+- Tag the tip of `hotfix/X.Y.Z` (the binary rebuild commit) as `X.Y.Z`.
+- **IF THERE ARE MERGE CONFLICTS, TAKE CARE WHEN RESOLVING THEM!!!**
+  - The merge conflict will almost certainly be in the binary build; you
+    need to keep the binaries for whichever side of the merge will be the
+    version in `main` post-merge (likely the highest version number).
+  - The merge conflict resolution **MUST NOT** alter or rebase any commit
+    below or at the tag `X.Y.Z`.
+- Merge the PR.
+
 
 This contribution guide is inspired on great projects like [AlamoFire](https://github.com/Alamofire/Foundation/blob/master/CONTRIBUTING.md) and [CocoaPods](https://github.com/CocoaPods/CocoaPods/blob/master/CONTRIBUTING.md)

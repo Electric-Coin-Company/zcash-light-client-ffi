@@ -158,6 +158,38 @@ typedef struct FFIEncodedKeys {
 } FFIEncodedKeys;
 
 /**
+ * A description of the policy that is used to determine what notes are available for spending,
+ * based upon the number of confirmations (the number of blocks in the chain since and including
+ * the block in which a note was produced.)
+ *
+ * See [`ZIP 315`] for details including the definitions of "trusted" and "untrusted" notes.
+ *
+ * # Note
+ *
+ * `trusted` and `untrusted` are both meant to be non-zero values.
+ * `0` will be treated as a request for a default value.
+ *
+ * [`ZIP 315`]: https://zips.z.cash/zip-0315
+ */
+typedef struct ConfirmationsPolicy {
+  /**
+   * The number of confirmations required before trusted notes may be spent. NonZero, set this
+   * and `untrusted` to zero to accept the default value for each.
+   */
+  uint32_t trusted;
+  /**
+   * The number of confirmations required before untrusted notes may be spent. NonZero, set this
+   * and `trusted` both to zero to accept the default value for each.
+   */
+  uint32_t untrusted;
+  /**
+   * A flag that enables selection of zero-conf transparent UTXOs for spends in shielding
+   * transactions.
+   */
+  bool allow_zero_conf_shielding;
+} ConfirmationsPolicy;
+
+/**
  * A struct that contains a subtree root.
  *
  * # Safety
@@ -974,7 +1006,7 @@ struct FFIEncodedKeys *zcashlc_list_transparent_receivers(const uint8_t *db_data
 
 /**
  * Returns the verified transparent balance for `address`, which ignores utxos that have been
- * received too recently and are not yet deemed spendable according to `min_confirmations`.
+ * received too recently and are not yet deemed spendable according to `confirmations_policy`.
  *
  * # Safety
  *
@@ -991,11 +1023,11 @@ int64_t zcashlc_get_verified_transparent_balance(const uint8_t *db_data,
                                                  uintptr_t db_data_len,
                                                  const char *address,
                                                  uint32_t network_id,
-                                                 uint32_t min_confirmations);
+                                                 struct ConfirmationsPolicy confirmations_policy);
 
 /**
  * Returns the verified transparent balance for `account`, which ignores utxos that have been
- * received too recently and are not yet deemed spendable according to `min_confirmations`.
+ * received too recently and are not yet deemed spendable according to `confirmations_policy`.
  *
  * # Safety
  *
@@ -1014,7 +1046,7 @@ int64_t zcashlc_get_verified_transparent_balance_for_account(const uint8_t *db_d
                                                              uintptr_t db_data_len,
                                                              uint32_t network_id,
                                                              const uint8_t *account_uuid_bytes,
-                                                             uint32_t min_confirmations);
+                                                             struct ConfirmationsPolicy confirmations_policy);
 
 /**
  * Returns the balance for `address`, including all UTXOs that we know about.
@@ -1254,7 +1286,7 @@ int64_t zcashlc_max_scanned_height(const uint8_t *db_data,
 struct FfiWalletSummary *zcashlc_get_wallet_summary(const uint8_t *db_data,
                                                     uintptr_t db_data_len,
                                                     uint32_t network_id,
-                                                    uint32_t min_confirmations);
+                                                    struct ConfirmationsPolicy confirmations_policy);
 
 /**
  * Returns a list of suggested scan ranges based upon the current wallet state.
@@ -1453,13 +1485,16 @@ int32_t zcashlc_latest_cached_block_height(const uint8_t *fs_block_db_root,
  * - The memory referenced by `tx` must not be mutated for the duration of the function call.
  * - The total size `tx_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `txid_ret` must be non-null and valid for writes of 32 bytes with an alignment of 1.
+ *   On successful execution this will contain the txid of the decrypted transaction.
  */
 int32_t zcashlc_decrypt_and_store_transaction(const uint8_t *db_data,
                                               uintptr_t db_data_len,
                                               const uint8_t *tx,
                                               uintptr_t tx_len,
                                               int64_t mined_height,
-                                              uint32_t network_id);
+                                              uint32_t network_id,
+                                              uint8_t *txid_ret);
 
 /**
  * Select transaction inputs, compute fees, and construct a proposal for a transaction
@@ -1491,7 +1526,7 @@ struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
                                                int64_t value,
                                                const uint8_t *memo,
                                                uint32_t network_id,
-                                               uint32_t min_confirmations);
+                                               struct ConfirmationsPolicy confirmations_policy);
 
 /**
  * Select transaction inputs, compute fees, and construct a proposal for a transaction
@@ -1512,7 +1547,7 @@ struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
  *   function call.
  * - `payment_uri` must be non-null and must point to a null-terminated UTF-8 string.
  * - `network_id` a u32. 0 for Testnet and 1 for Mainnet
- * - `min_confirmations` number of confirmations of the funds to spend
+ * - `confirmations_policy` number of trusted/untrusted confirmations of the funds to spend
  * - `use_zip317_fees` `true` to use ZIP-317 fees.
  * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
  *   pointer when done using it.
@@ -1522,7 +1557,7 @@ struct FfiBoxedSlice *zcashlc_propose_transfer_from_uri(const uint8_t *db_data,
                                                         const uint8_t *account_uuid_bytes,
                                                         const char *payment_uri,
                                                         uint32_t network_id,
-                                                        uint32_t min_confirmations);
+                                                        struct ConfirmationsPolicy confirmations_policy);
 
 int32_t zcashlc_branch_id_for_height(int32_t height, uint32_t network_id);
 
@@ -1559,7 +1594,7 @@ void zcashlc_string_free(char *s);
  *   individually shielded in transactions that may be temporally clustered. Keeping transparent
  *   activity private is very difficult; caveat emptor.
  * - network_id: The identifier for the network in use: 0 for testnet, 1 for mainnet.
- * - min_confirmations: The number of confirmations that are required for a UTXO to be considered
+ * - confirmations_policy: The minimum number of confirmations that are required for a UTXO to be considered
  *   for shielding.
  *
  * # Safety
@@ -1585,7 +1620,7 @@ struct FfiBoxedSlice *zcashlc_propose_shielding(const uint8_t *db_data,
                                                 uint64_t shielding_threshold,
                                                 const char *transparent_receiver,
                                                 uint32_t network_id,
-                                                uint32_t min_confirmations);
+                                                struct ConfirmationsPolicy confirmations_policy);
 
 /**
  * Creates a transaction from the given proposal.

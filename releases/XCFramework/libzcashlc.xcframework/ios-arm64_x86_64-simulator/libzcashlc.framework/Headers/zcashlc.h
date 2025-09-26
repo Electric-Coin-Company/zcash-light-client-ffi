@@ -1529,6 +1529,37 @@ struct FfiBoxedSlice *zcashlc_propose_transfer(const uint8_t *db_data,
                                                struct ConfirmationsPolicy confirmations_policy);
 
 /**
+ * Selects all spendable transaction inputs, computes fees, and constructs a proposal for a transaction
+ * that can then be authorized and made ready for submission to the network with
+ * `zcashlc_create_proposed_transaction`.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an alignment
+ *   of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
+ * - `to` must be non-null and must point to a null-terminated UTF-8 string.
+ * - `memo` must either be null (indicating an empty memo or a transparent recipient) or point to a
+ *   512-byte array.
+ * - Call [`zcashlc_free_boxed_slice`] to free the memory associated with the returned
+ *   pointer when done using it.
+ */
+struct FfiBoxedSlice *zcashlc_propose_send_max_transfer(const uint8_t *db_data,
+                                                        uintptr_t db_data_len,
+                                                        const uint8_t *account_uuid_bytes,
+                                                        const char *to,
+                                                        const uint8_t *memo,
+                                                        uint32_t network_id,
+                                                        uint32_t min_confirmations);
+
+/**
  * Select transaction inputs, compute fees, and construct a proposal for a transaction
  * from a ZIP-321 payment URI that can then be authorized and made ready for submission to the
  * network with `zcashlc_create_proposed_transaction`.

@@ -1485,13 +1485,16 @@ int32_t zcashlc_latest_cached_block_height(const uint8_t *fs_block_db_root,
  * - The memory referenced by `tx` must not be mutated for the duration of the function call.
  * - The total size `tx_len` must be no larger than `isize::MAX`. See the safety
  *   documentation of pointer::offset.
+ * - `txid_ret` must be non-null and valid for writes of 32 bytes with an alignment of 1.
+ *   On successful execution this will contain the txid of the decrypted transaction.
  */
 int32_t zcashlc_decrypt_and_store_transaction(const uint8_t *db_data,
                                               uintptr_t db_data_len,
                                               const uint8_t *tx,
                                               uintptr_t tx_len,
                                               int64_t mined_height,
-                                              uint32_t network_id);
+                                              uint32_t network_id,
+                                              uint8_t *txid_ret);
 
 /**
  * Select transaction inputs, compute fees, and construct a proposal for a transaction

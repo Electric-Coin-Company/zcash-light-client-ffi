@@ -18,7 +18,6 @@ use transparent::{
 };
 use zcash_script::script;
 
-use std::array::TryFromSliceError;
 use std::convert::{Infallible, TryFrom, TryInto};
 use std::error::Error;
 use std::ffi::{CStr, CString, OsStr};
@@ -30,6 +29,7 @@ use std::path::Path;
 use std::ptr;
 use std::slice;
 use std::time::UNIX_EPOCH;
+use std::{array::TryFromSliceError, time::SystemTime};
 
 use tor_rtcompat::BlockOn as _;
 use tracing::{debug, metadata::LevelFilter};
@@ -43,6 +43,7 @@ use zcash_client_backend::{
     fees::{SplitPolicy, StandardFeeRule, zip317::MultiOutputChangeStrategy},
     keys::{ReceiverRequirement, UnifiedAddressRequest, UnifiedFullViewingKey},
     tor::http::HttpError,
+    wallet::ExposedAt,
 };
 use zcash_client_sqlite::{error::SqliteClientError, util::SystemClock};
 
@@ -716,6 +717,53 @@ pub unsafe extern "C" fn zcashlc_get_current_address(
                 account_uuid
             )),
             Err(e) => Err(anyhow!("Error while fetching address: {}", e)),
+        }
+    });
+    unwrap_exc_or_null(res)
+}
+
+/// Generates and returns an ephemeral address for one-time use, such as when receiving a swap from
+/// a decentralized exchange.
+///
+/// # Safety
+///
+/// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+///   alignment of `1`. Its contents must be a string representing a valid system path in the
+///   operating system's preferred representation.
+/// - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+/// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+/// - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an
+///   alignment of `1`.
+/// - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+///   function call.
+/// - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+///   when done using it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zcashlc_get_single_use_taddr(
+    db_data: *const u8,
+    db_data_len: usize,
+    account_uuid_bytes: *const u8,
+    network_id: u32,
+) -> *mut c_char {
+    let res = catch_panic(|| {
+        let network = parse_network(network_id)?;
+        let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
+        let account_uuid = account_uuid_from_bytes(account_uuid_bytes)?;
+
+        match db_data.reserve_next_n_ephemeral_addresses(account_uuid, 1) {
+            Ok(addrs) => {
+                if let Some((addr, _)) = addrs.first() {
+                    let address_str = addr.encode(&network);
+                    Ok(CString::new(address_str).unwrap().into_raw())
+                } else {
+                    Err(anyhow!("Unable to reserve a new one-time-use address"))
+                }
+            }
+            Err(e) => Err(anyhow!(
+                "Error while generating one-time-use address: {}",
+                e
+            )),
         }
     });
     unwrap_exc_or_null(res)
@@ -3441,6 +3489,108 @@ pub unsafe extern "C" fn zcashlc_tor_lwd_conn_get_tree_state(
         Ok(ffi::BoxedSlice::some(treestate.encode_to_vec()))
     });
     unwrap_exc_or(res, ptr::null_mut())
+}
+
+/// Checks to find any single-use ephemeral addresses exposed in the past day that have not yet
+/// received funds, excluding any whose next check time is in the future. This will then choose the
+/// address that is most overdue for checking, retrieve any UTXOs for that address over Tor, and
+/// add them to the wallet database. If no such UTXOs are found, the check will be rescheduled
+/// following an expoential-backoff-with-jitter algorithm.
+///
+/// Returns `true` if UTXOs were added to the wallet, `false` otherwise.
+///
+/// # Safety
+///
+/// - `lwd_conn` must be a non-null pointer returned by a `zcashlc_*` method with
+///   return type `*mut tor::LwdConn` that has not previously been freed.
+/// - `lwd_conn` must not be passed to two FFI calls at the same time.
+/// - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+///   alignment of `1`. Its contents must be a string representing a valid system path in the
+///   operating system's preferred representation.
+/// - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+/// - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+///   documentation of pointer::offset.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn zcashlc_tor_lwd_conn_check_single_use_taddr(
+    lwd_conn: *mut tor::LwdConn,
+    db_data: *const u8,
+    db_data_len: usize,
+    network_id: u32,
+    account_uuid_bytes: *const u8,
+) -> bool {
+    // SAFETY: We ensure unwind safety by:
+    // - using `*mut tor::LwdConn` and respecting mutability rules on the Swift side, to
+    //   avoid observing the effects of a panic in another thread.
+    // - discarding the `tor::LwdConn` whenever we get an error that is due to a panic.
+    let lwd_conn = AssertUnwindSafe(lwd_conn);
+
+    let res = catch_panic(|| {
+        let network = parse_network(network_id)?;
+        let mut db_data = unsafe { wallet_db(db_data, db_data_len, network)? };
+        let account_uuid = account_uuid_from_bytes(account_uuid_bytes)?;
+
+        let lwd_conn = unsafe { lwd_conn.as_mut() }
+            .ok_or_else(|| anyhow!("A Tor lightwalletd connection is required"))?;
+
+        // one day's worth of blocks.
+        let exposure_depth = (24 * 60 * 60) / 75;
+        let addrs =
+            db_data.get_ephemeral_transparent_receivers(account_uuid, exposure_depth, true)?;
+
+        // pick the address with the minimum check time that is less than or equal to now (or
+        // absent)
+        let now = SystemTime::now();
+        let selected_addr_meta = addrs
+            .into_iter()
+            .filter(|(_, meta)| {
+                meta.as_ref()
+                    .and_then(|m| m.next_check_time())
+                    .iter()
+                    .all(|t| t <= &now)
+            })
+            .min_by_key(|(_, meta)| meta.as_ref().map(|m| m.next_check_time()));
+
+        let cur_height = db_data
+            .chain_height()?
+            .ok_or(SqliteClientError::ChainHeightUnknown)?;
+
+        let mut found = false;
+        if let Some((addr, meta)) = selected_addr_meta {
+            lwd_conn.with_taddress_transactions(
+                &network,
+                addr,
+                None,
+                None,
+                |tx_data, mined_height| {
+                    found = true;
+                    let consensus_branch_id =
+                        BranchId::for_height(&network, mined_height.unwrap_or(cur_height + 1));
+
+                    let tx = Transaction::read(&tx_data[..], consensus_branch_id)?;
+                    decrypt_and_store_transaction(&network, &mut db_data, &tx, mined_height)?;
+
+                    Ok(())
+                },
+            )?;
+
+            if !found {
+                let blocks_since_exposure = meta
+                    .and_then(|m| match m.exposed_at() {
+                        ExposedAt::Height(block_height) => Some(cur_height - block_height),
+                        ExposedAt::Unexposed => None,
+                        ExposedAt::Unknown => None,
+                    })
+                    .unwrap_or(1);
+
+                // the log_2 of the number of blocks since exposure will always fit in a u32
+                let offset_seconds = f64::from(blocks_since_exposure).log2().round() as u32;
+                db_data.schedule_next_check(&addr, offset_seconds)?;
+            }
+        }
+
+        Ok(found)
+    });
+    unwrap_exc_or(res, false)
 }
 
 //

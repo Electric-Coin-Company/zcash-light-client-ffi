@@ -945,6 +945,30 @@ char *zcashlc_get_current_address(const uint8_t *db_data,
                                   uint32_t network_id);
 
 /**
+ * Generates and returns an ephemeral address for one-time use, such as when receiving a swap from
+ * a decentralized exchange.
+ *
+ * # Safety
+ *
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ * - `account_uuid_bytes` must be non-null and valid for reads for 16 bytes, and it must have an
+ *   alignment of `1`.
+ * - The memory referenced by `account_uuid_bytes` must not be mutated for the duration of the
+ *   function call.
+ * - Call [`zcashlc_string_free`] to free the memory associated with the returned pointer
+ *   when done using it.
+ */
+char *zcashlc_get_single_use_taddr(const uint8_t *db_data,
+                                   uintptr_t db_data_len,
+                                   const uint8_t *account_uuid_bytes,
+                                   uint32_t network_id);
+
+/**
  * Returns a newly-generated unified payment address for the specified account, with the next
  * available diversifier and the specified set of receivers.
  *
@@ -2214,6 +2238,33 @@ bool zcashlc_tor_lwd_conn_submit_transaction(struct LwdConn *lwd_conn,
  */
 struct FfiBoxedSlice *zcashlc_tor_lwd_conn_get_tree_state(struct LwdConn *lwd_conn,
                                                           uint32_t height);
+
+/**
+ * Checks to find any single-use ephemeral addresses exposed in the past day that have not yet
+ * received funds, excluding any whose next check time is in the future. This will then choose the
+ * address that is most overdue for checking, retrieve any UTXOs for that address over Tor, and
+ * add them to the wallet database. If no such UTXOs are found, the check will be rescheduled
+ * following an expoential-backoff-with-jitter algorithm.
+ *
+ * Returns `true` if UTXOs were added to the wallet, `false` otherwise.
+ *
+ * # Safety
+ *
+ * - `lwd_conn` must be a non-null pointer returned by a `zcashlc_*` method with
+ *   return type `*mut tor::LwdConn` that has not previously been freed.
+ * - `lwd_conn` must not be passed to two FFI calls at the same time.
+ * - `db_data` must be non-null and valid for reads for `db_data_len` bytes, and it must have an
+ *   alignment of `1`. Its contents must be a string representing a valid system path in the
+ *   operating system's preferred representation.
+ * - The memory referenced by `db_data` must not be mutated for the duration of the function call.
+ * - The total size `db_data_len` must be no larger than `isize::MAX`. See the safety
+ *   documentation of pointer::offset.
+ */
+bool zcashlc_tor_lwd_conn_check_single_use_taddr(struct LwdConn *lwd_conn,
+                                                 const uint8_t *db_data,
+                                                 uintptr_t db_data_len,
+                                                 uint32_t network_id,
+                                                 const uint8_t *account_uuid_bytes);
 
 /**
  * Returns the network type and address kind for the given address string,
